@@ -4,6 +4,7 @@ import { S, save, getPlan, getEx, suggestFor, lastPerf, checkPR, checkAchievemen
 import { todayISO, fmtKg, fmtClock, fmtVol, fmtDate, esc, stepFor, e1rm } from '../util.js';
 import { openSheet, closeSheet, toast, confirmSheet, vibrate } from '../components.js';
 import { exerciseLink } from '../data/exercises.js';
+import { unavailableBadgeHTML, markButtonHTML } from './altswap.js';
 import { A } from '../actions.js';
 
 let clockInterval = null;
@@ -11,6 +12,11 @@ let wakeLock = null;
 let open = false;
 
 export function isOpen() { return open; }
+
+// Player nach externer Änderung an S.session (z. B. Übungs-Tausch) neu zeichnen
+export function refresh() {
+  if (open) renderPlayer();
+}
 
 // ── Session starten / fortsetzen ──
 export function start(planId, dayId) {
@@ -24,12 +30,17 @@ export function start(planId, dayId) {
     dayName: day.name,
     start: Date.now(),
     entries: day.entries.map(en => {
-      const ex = getEx(en.exId);
-      const sug = suggestFor(en.exId, en);
+      // „Nur für dieses Mal“-Tausch aus dem Plan-Editor konsumieren (einmalig)
+      const altExId = S.tempSwaps[en.id];
+      if (altExId) delete S.tempSwaps[en.id];
+      const exId = altExId || en.exId;
+      const ex = getEx(exId);
+      const sug = suggestFor(exId, en);
       const startR = (ex && ex.bw) ? (sug.r || en.rMin) : en.rMin;
       return {
-        exId: en.exId,
-        name: ex ? ex.n : en.exId,
+        id: en.id,
+        exId,
+        name: ex ? ex.n : exId,
         rest: en.rest || S.settings.rest,
         rMin: en.rMin, rMax: en.rMax,
         bw: !!(ex && ex.bw), time: !!(ex && ex.t),
@@ -120,25 +131,49 @@ function exCard(en, ei) {
 
   const unitLbl = en.time ? 'Sek.' : 'Wdh.';
   const rows = en.sets.map((set, si) => setRow(en, ei, set, si)).join('');
+  const ctx = { mode: 'session', ei };
+
+  // Primäre Anleitung: externer Link, sofern online — sonst (oder falls es nie
+  // einen Link gab) die lokal hinterlegte Offline-Anleitung als Fallback.
+  const instrAttr = ex && ex.instr
+    ? ` onclick="if(!navigator.onLine){event.preventDefault();A.showInstr('${en.exId}')}"`
+    : '';
+  const guideLink = link
+    ? `<a href="${link}" target="_blank" rel="noopener" style="font-size:12px"${instrAttr}>↗ Anleitung</a>`
+    : (ex && ex.instr ? `<button class="linklike" style="font-size:12px" onclick="A.showInstr('${en.exId}')">↗ Anleitung (offline)</button>` : '');
 
   return `
     <div class="exc" id="card-${ei}">
       <div class="exc-head">
         <div class="grow">
           <div class="exc-name">${esc(en.name)} <span id="pr-${ei}">${en.pr ? prBadge() : ''}</span></div>
-          ${link ? `<a href="${link}" target="_blank" rel="noopener" style="font-size:12px">↗ Anleitung</a>` : ''}
+          ${guideLink}
         </div>
+        ${markButtonHTML(en.exId, ctx)}
       </div>
       <div class="exc-meta">
         ${(ex ? ex.m : []).slice(0, 2).map(m => `<span class="chip">${m}</span>`).join('')}
         ${en.bw ? '<span class="chip chip-acc">Bodyweight</span>' : `<span class="chip chip-line">${esc(en.eq || '')}</span>`}
         <span class="chip chip-line">${ic('stopwatch')} ${en.rest}s</span>
       </div>
+      ${unavailableBadgeHTML(en.exId, ctx)}
       <div class="exc-prev">${prev}</div>
       <div class="set-head"><span>#</span><span>${en.bw ? '' : 'Gewicht'}</span><span>${unitLbl}</span><span>✓</span></div>
       ${rows}
     </div>`;
 }
+
+// Fallback-Anleitung offline anzeigen (siehe exercises.js: `instr`-Feld)
+A.showInstr = exId => {
+  const ex = getEx(exId);
+  const steps = ex && ex.instr;
+  openSheet({
+    title: ex ? ex.n : 'Anleitung',
+    body: steps
+      ? `<ol class="instr-list">${steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`
+      : `<p class="t2">Keine Offline-Anleitung hinterlegt — bitte online erneut versuchen.</p>`,
+  });
+};
 
 function setRow(en, ei, set, si) {
   const wStep = stepFor(en.eq);

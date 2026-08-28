@@ -197,4 +197,28 @@ export const TEMPLATES = [
       ]},
     ],
   },
+  {
+    id: 'home-fullbody',
+    kind: 'home',
+    name: 'Ganzkörper Zuhause',
+    desc: '2 Tage · Körpergewicht & Kurzhanteln · kein fester Wochentag',
+    days: [
+      { name: 'Ganzkörper A – Zuhause', weekday: null, entries: [
+        ['goblet-squat', 3, 10, 12, 90],
+        ['push-up', 4, 10, 20, 60],
+        ['dumbbell-row', 3, 10, 12, 90],
+        ['dumbbell-rdl', 3, 10, 12, 90],
+        ['plank', 3, 30, 45, 45],
+        ['russian-twist', 3, 15, 20, 45],
+      ]},
+      { name: 'Ganzkörper B – Zuhause', weekday: null, entries: [
+        ['bulgarian-split-squat', 3, 10, 12, 90],
+        ['dumbbell-shoulder-press', 3, 8, 10, 90],
+        ['walking-lunge', 3, 10, 12, 90],
+        ['hammer-curl', 3, 10, 12, 60],
+        ['standing-dumbbell-calf-raise', 4, 15, 20, 45],
+        ['side-plank', 3, 30, 45, 45],
+      ]},
+    ],
+  },
 ];

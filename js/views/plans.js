@@ -5,6 +5,7 @@ import { TEMPLATES } from '../data/templates.js';
 import { EQUIPMENT } from '../data/exercises.js';
 import { DAYS, DAYS_LONG, MUSCLES, uid, esc } from '../util.js';
 import { openSheet, closeSheet, toast, confirmSheet } from '../components.js';
+import { unavailableBadgeHTML, markButtonHTML, toggleUnavailableExercise } from './altswap.js';
 import { A } from '../actions.js';
 
 let mode = { view: 'list' };
@@ -26,27 +27,35 @@ export function render() {
 }
 
 // ── Ebene 1: Plan-Liste ──
+function isActivePlan(p) {
+  return p.id === (p.kind === 'home' ? S.activeHomePlanId : S.activePlanId);
+}
+
 function renderList() {
   const rows = S.plans.map(p => {
-    const active = p.id === S.activePlanId;
+    const active = isActivePlan(p);
     return `
       <button class="row${active ? ' row-acc' : ''}" onclick="A.planOpen('${p.id}')">
         <div class="row-main">
           <div class="row-title">${esc(p.name)}</div>
           <div class="row-sub">${p.days.length} Trainingstage</div>
         </div>
-        <div class="row-end">${active ? '<span class="chip chip-acc">Aktiv</span>' : ''}${ic('chevron_right')}</div>
+        <div class="row-end">
+          ${p.kind === 'home' ? '<span class="chip">Zuhause</span>' : ''}
+          ${active ? '<span class="chip chip-acc">Aktiv</span>' : ''}${ic('chevron_right')}
+        </div>
       </button>`;
   }).join('');
 
   return `
     ${S.plans.length ? rows : `<div class="empty">${ic('clipboard_list')}<br>Noch keine Pläne.<br>Starte mit einer Vorlage oder baue deinen eigenen.</div>`}
-    <button class="btn btn-acc full mt8" onclick="A.planNew()">${ic('plus')} Neuer Plan</button>`;
+    <button class="btn btn-acc full mt8" onclick="A.planNew('gym')">${ic('plus')} Neuer Gym-Plan</button>
+    <button class="btn full mt8" onclick="A.planNew('home')">${ic('home')} Neuer Zuhause-Plan</button>`;
 }
 
 // ── Ebene 2: Plan-Detail ──
 function renderPlan(p) {
-  const active = p.id === S.activePlanId;
+  const active = isActivePlan(p);
   const days = p.days.map(d => `
     <button class="row" onclick="A.dayOpen('${p.id}','${d.id}')">
       <div class="row-main">
@@ -76,6 +85,7 @@ function renderPlan(p) {
 function renderDay(p, d) {
   const entries = d.entries.map(en => {
     const ex = getEx(en.exId);
+    const ctx = { mode: 'plan', planId: p.id, dayId: d.id, entryId: en.id };
     return `
       <div class="entry-row">
         <div class="entry-main">
@@ -83,10 +93,12 @@ function renderDay(p, d) {
           <div class="entry-sub">${en.sets}×${en.rMin}${en.rMax !== en.rMin ? '–' + en.rMax : ''}${ex && ex.t ? ' Sek' : ''} · Pause ${en.rest}s</div>
         </div>
         <div class="entry-actions">
+          ${markButtonHTML(en.exId, ctx)}
           <button class="iconbtn" onclick="A.entrySettings('${p.id}','${d.id}','${en.id}')" aria-label="Einstellungen">${ic('settings')}</button>
           <button class="iconbtn" onclick="A.entryDelete('${p.id}','${d.id}','${en.id}')" aria-label="Entfernen">${ic('trash')}</button>
         </div>
-      </div>`;
+      </div>
+      ${unavailableBadgeHTML(en.exId, ctx)}`;
   }).join('');
 
   return `
@@ -113,20 +125,21 @@ A.plansBack = () => { mode = { view: 'list' }; render(); };
 A.dayOpen = (planId, dayId) => { mode = { view: 'day', planId, dayId }; render(); };
 
 // ── Plan-Aktionen ──
-A.planNew = () => {
+A.planNew = (kind = 'gym') => {
+  const templates = TEMPLATES.filter(t => (t.kind || 'gym') === kind);
   openSheet({
-    title: 'Neuer Plan',
+    title: kind === 'home' ? 'Neuer Zuhause-Plan' : 'Neuer Plan',
     body: `
-      <button class="row" onclick="A.planCreate(null)">
+      <button class="row" onclick="A.planCreate(null,'${kind}')">
         <div class="row-main">
           <div class="row-title">Leerer Plan</div>
           <div class="row-sub">Von Grund auf selbst bauen</div>
         </div>
         <div class="row-end">${ic('plus')}</div>
       </button>
-      <div class="slbl">Vorlagen</div>
-      ${TEMPLATES.map(t => `
-        <button class="row" onclick="A.planCreate('${t.id}')">
+      ${templates.length ? `<div class="slbl">Vorlagen</div>` : ''}
+      ${templates.map(t => `
+        <button class="row" onclick="A.planCreate('${t.id}','${kind}')">
           <div class="row-main">
             <div class="row-title">${esc(t.name)}</div>
             <div class="row-sub">${esc(t.desc)}</div>
@@ -136,17 +149,18 @@ A.planNew = () => {
   });
 };
 
-A.planCreate = tid => {
+A.planCreate = (tid, kind = 'gym') => {
   closeSheet();
   let plan;
   if (tid) {
     plan = instantiateTemplate(tid);
     plan.byUser = true;
   } else {
-    plan = { id: uid(), name: 'Mein Plan', byUser: true, days: [] };
+    plan = { id: uid(), name: kind === 'home' ? 'Mein Zuhause-Plan' : 'Mein Plan', byUser: true, kind, days: [] };
   }
   S.plans.push(plan);
-  if (!S.activePlanId) S.activePlanId = plan.id;
+  if (plan.kind === 'home') { if (!S.activeHomePlanId) S.activeHomePlanId = plan.id; }
+  else if (!S.activePlanId) S.activePlanId = plan.id;
   save();
   checkAchievements();
   mode = { view: 'plan', planId: plan.id };
@@ -155,7 +169,8 @@ A.planCreate = tid => {
 };
 
 A.planActivate = id => {
-  S.activePlanId = id;
+  const p = getPlan(id);
+  if (p.kind === 'home') S.activeHomePlanId = id; else S.activePlanId = id;
   save();
   render();
   toast('Plan ist jetzt aktiv');
@@ -170,7 +185,8 @@ A.planDelete = async id => {
   const p = getPlan(id);
   if (!(await confirmSheet('Plan löschen?', `„${esc(p.name)}" wird dauerhaft gelöscht. Deine Trainings-Historie bleibt erhalten.`))) return;
   S.plans = S.plans.filter(x => x.id !== id);
-  if (S.activePlanId === id) S.activePlanId = S.plans[0] ? S.plans[0].id : null;
+  if (S.activePlanId === id) S.activePlanId = S.plans.find(x => x.kind !== 'home')?.id || null;
+  if (S.activeHomePlanId === id) S.activeHomePlanId = S.plans.find(x => x.kind === 'home')?.id || null;
   save();
   mode = { view: 'list' };
   render();
@@ -261,23 +277,42 @@ function renderPickPills() {
 
 A.pickMuscle = m => { pickFilter.muscle = m; renderPickPills(); renderPickList(); };
 
+// Verfügbarkeit direkt im Picker umschalten (nur die offene Liste neu zeichnen)
+A.pickToggleUnavailable = exId => {
+  const turningOn = toggleUnavailableExercise(exId);
+  renderPickList();
+  toast(turningOn ? 'Als nicht verfügbar markiert' : 'Wieder verfügbar');
+};
+
 function renderPickList() {
   const el = document.getElementById('pick-list');
   if (!el) return;
   let list = allExercises();
+  const plan = pickCtx && getPlan(pickCtx.planId);
+  if (plan && plan.kind === 'home') {
+    list = list.filter(x => x.eq === 'Körpergewicht' || S.settings.homeEquipment.includes(x.eq));
+  }
   if (pickFilter.muscle) list = list.filter(x => x.m.includes(pickFilter.muscle));
   if (pickFilter.q) list = list.filter(x => x.n.toLowerCase().includes(pickFilter.q));
   list = list.slice().sort((a, b) => a.n.localeCompare(b.n));
   el.innerHTML = list.length
-    ? list.map(x => `
-      <button class="lib-item" onclick="A.entryPick('${x.id}')">
-        <div class="grow">
-          <div class="lib-name">${esc(x.n)}${x.custom ? ' <span class="chip" style="font-size:10px">Eigene</span>' : ''}</div>
-          <div class="lib-sub">${x.m.join(' · ')} · ${x.eq}</div>
-        </div>
-        ${ic('plus')}
-      </button>`).join('')
-    : `<div class="chart-empty">Nichts gefunden.</div>`;
+    ? list.map(x => {
+      const unavailable = S.settings.unavailableExercises.includes(x.id);
+      return `
+      <div class="lib-item">
+        <button class="grow" style="text-align:left;display:flex;gap:12px;align-items:center" onclick="A.entryPick('${x.id}')">
+          <div class="grow">
+            <div class="lib-name">${esc(x.n)}${x.custom ? ' <span class="chip" style="font-size:10px">Eigene</span>' : ''}${unavailable ? ' <span class="chip chip-danger" style="font-size:10px">Nicht verfügbar</span>' : ''}</div>
+            <div class="lib-sub">${x.m.join(' · ')} · ${x.eq}</div>
+          </div>
+          ${ic('plus')}
+        </button>
+        <button class="iconbtn${unavailable ? ' active' : ''}" onclick="A.pickToggleUnavailable('${x.id}')" aria-label="Verfügbarkeit umschalten" title="Mein Gym hat das nicht">${ic('ban')}</button>
+      </div>`;
+    }).join('')
+    : (plan && plan.kind === 'home'
+      ? `<div class="chart-empty">Nichts gefunden. Passe dein Zuhause-Equipment in den Einstellungen an.</div>`
+      : `<div class="chart-empty">Nichts gefunden.</div>`);
 }
 
 A.entryPick = exId => {
@@ -391,6 +426,7 @@ A.entryDelete = async (planId, dayId, entryId) => {
   const ex = getEx(en.exId);
   if (!(await confirmSheet('Übung entfernen?', `„${esc(ex ? ex.n : '')}" aus diesem Tag entfernen?`, 'Entfernen'))) return;
   d.entries = d.entries.filter(x => x.id !== entryId);
+  delete S.tempSwaps[entryId];
   save();
   render();
 };

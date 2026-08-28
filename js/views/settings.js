@@ -3,8 +3,11 @@ import { ic } from '../icons.js';
 import { S, save, checkAchievements } from '../state.js';
 import { todayISO, fmtKg, esc } from '../util.js';
 import { openSheet, closeSheet, toast, confirmSheet } from '../components.js';
+import { EQUIPMENT } from '../data/exercises.js';
 import { A } from '../actions.js';
 import { applyTheme, rerender } from '../app.js';
+
+const HOME_EQUIPMENT_OPTIONS = EQUIPMENT.filter(e => e !== 'Körpergewicht');
 
 export function open() {
   openSheet({
@@ -57,6 +60,12 @@ function bodyHTML() {
       ${ic('chevron_right')}
     </button>
 
+    <div class="slbl">Zuhause-Equipment</div>
+    <div class="row-sub" style="margin-bottom:10px">Körpergewicht ist beim Zuhause-Training immer dabei. Was hast du zusätzlich?</div>
+    <div class="pills" style="flex-wrap:wrap">
+      ${HOME_EQUIPMENT_OPTIONS.map(eq => `<button class="pill${s.homeEquipment.includes(eq) ? ' on' : ''}" data-home-eq="${eq}">${eq}</button>`).join('')}
+    </div>
+
     <div class="slbl">Daten</div>
     <button class="set-item" data-export>
       ${ic('download')}
@@ -106,6 +115,17 @@ function wire(sheet) {
     sheet.querySelector('#st-bar').textContent = fmtKg(S.settings.barWeight) + ' kg';
   }));
 
+  sheet.querySelectorAll('[data-home-eq]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const eq = btn.dataset.homeEq;
+      const list = S.settings.homeEquipment;
+      const i = list.indexOf(eq);
+      if (i >= 0) list.splice(i, 1); else list.push(eq);
+      btn.classList.toggle('on', i < 0);
+      save();
+    });
+  });
+
   sheet.querySelector('[data-plates]').addEventListener('click', () => A.plates(60));
   sheet.querySelector('[data-export]').addEventListener('click', exportData);
 
@@ -144,7 +164,7 @@ function importData(input) {
   reader.onload = async () => {
     try {
       const data = JSON.parse(reader.result);
-      if (!data || data.version !== 5 || !Array.isArray(data.logs)) {
+      if (!data || !(data.version >= 5) || !Array.isArray(data.logs)) {
         toast('Keine gültige Backup-Datei', 'info_circle');
         return;
       }

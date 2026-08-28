@@ -1,4 +1,4 @@
-const CACHE = 'gym-trainer-v5.0.0';
+const CACHE = 'gym-trainer-v5.1.0';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,7 @@ const ASSETS = [
   './js/views/stats.js',
   './js/views/history.js',
   './js/views/settings.js',
+  './js/views/altswap.js',
   './fonts/archivo-var.woff2',
   './manifest.json',
   './icon-192.png',

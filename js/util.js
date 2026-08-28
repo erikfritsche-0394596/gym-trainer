@@ -24,6 +24,15 @@ export function fromISO(iso) {
   return new Date(y, m - 1, d);
 }
 
+// Ganze Tage zwischen zwei ISO-Daten (bIso - aIso), DST-sicher via UTC-Vergleich —
+// ein lokaler Millisekunden-Vergleich verschiebt sich um 1 Tag, sobald eine
+// Zeitumstellung (z. B. Ende Oktober) zwischen den beiden Daten liegt.
+export function daysBetweenISO(aIso, bIso) {
+  const [ay, am, ad] = aIso.split('-').map(Number);
+  const [by, bm, bd] = bIso.split('-').map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+}
+
 // Wochentag-Index: Mo=0 … So=6
 export function weekdayIdx(d = new Date()) {
   return (d.getDay() + 6) % 7;

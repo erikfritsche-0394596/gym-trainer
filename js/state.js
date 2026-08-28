@@ -8,12 +8,18 @@ const OLD_KEYS = ['gymtrainer_v4', 'gymtrainer_v3'];
 
 function defaultState() {
   return {
-    version: 5,
+    version: 6,
     createdAt: todayISO(),
-    settings: { theme: 'dark', rest: 90, vibrate: true, wakeLock: true, barWeight: 20, exported: false },
+    settings: {
+      theme: 'dark', rest: 90, vibrate: true, wakeLock: true, barWeight: 20, exported: false,
+      homeEquipment: ['Kurzhantel'], // was zuhause tatsächlich vorhanden ist (Körpergewicht ist immer dabei)
+      unavailableExercises: [],      // Übungs-IDs, die im eigenen Gym fehlen
+    },
     customExercises: [],   // eigene Übungen {id,n,m,eq,bw,t,custom:true}
-    plans: [],             // {id,name,byUser,days:[{id,name,weekday,entries:[{id,exId,sets,rMin,rMax,rest}]}]}
+    plans: [],             // {id,name,byUser,kind:'gym'|'home',days:[{id,name,weekday,entries:[{id,exId,sets,rMin,rMax,rest}]}]}
     activePlanId: null,
+    activeHomePlanId: null, // zweiter aktiver Slot, parallel zu activePlanId, für Pläne mit kind:'home'
+    tempSwaps: {},          // { [planEntryId]: altExId } — „nur für dieses Mal“, wird bei Trainingsstart konsumiert
     logs: [],              // neueste zuerst: {id,date,planId,dayId,dayName,duration,vol,entries:[{exId,name,sets:[{w,r,done}]}],prs:[]}
     prs: {},               // exId → {w,r,e1rm,date}
     bodyLog: [],           // neueste zuerst: {date,weight}
@@ -21,6 +27,7 @@ function defaultState() {
     achievements: {},      // achId → ISO-Datum
     legacyCount: 0,        // Workouts aus alter App, die nicht als Detail-Log vorliegen
     session: null,         // laufendes Training
+    goal: null,            // { targetWeight, targetDate, startWeight, startDate } | null
   };
 }
 
@@ -36,6 +43,7 @@ export function load() {
     if (raw) {
       S = { ...defaultState(), ...JSON.parse(raw) };
       S.settings = { ...defaultState().settings, ...S.settings };
+      S.plans.forEach(p => { if (!p.kind) p.kind = 'gym'; });
       return;
     }
     for (const ok of OLD_KEYS) {
@@ -137,6 +145,17 @@ export function addCustomExercise(ex) {
   return ex;
 }
 
+// Alternative mit gleicher Primär-Muskelgruppe, anderem Equipment, nicht selbst als
+// „nicht verfügbar“ markiert — Basis für die „Mein Gym hat das nicht“-Vorschläge.
+export function findAlternatives(exId) {
+  const ex = getEx(exId);
+  if (!ex) return [];
+  return allExercises()
+    .filter(x => x.id !== exId && x.m[0] === ex.m[0] && x.eq !== ex.eq
+      && !S.settings.unavailableExercises.includes(x.id))
+    .sort((a, b) => a.n.localeCompare(b.n));
+}
+
 // ─── Pläne ──────────────────────────────────────────────────────────────────
 export function instantiateTemplate(tid) {
   const t = TEMPLATES.find(x => x.id === tid);
@@ -145,6 +164,7 @@ export function instantiateTemplate(tid) {
     id: uid(),
     name: t.name,
     byUser: false,
+    kind: t.kind || 'gym',
     days: t.days.map(d => ({
       id: uid(),
       name: d.name,
@@ -158,10 +178,21 @@ export function activePlan() {
   return S.plans.find(p => p.id === S.activePlanId) || null;
 }
 
+export function activeHomePlan() {
+  return S.plans.find(p => p.id === S.activeHomePlanId) || null;
+}
+
 export function getPlan(id) { return S.plans.find(p => p.id === id) || null; }
 
 export function todaysDay() {
   const p = activePlan();
+  if (!p) return null;
+  const wd = weekdayIdx();
+  return p.days.find(d => d.weekday === wd) || null;
+}
+
+export function todaysHomeDay() {
+  const p = activeHomePlan();
   if (!p) return null;
   const wd = weekdayIdx();
   return p.days.find(d => d.weekday === wd) || null;
@@ -222,6 +253,15 @@ export function calcStreak() {
     d = addDays(d, -1);
   }
   return streak;
+}
+
+// Körpergewicht für heute eintragen/aktualisieren (Upsert nach Datum)
+export function logBodyWeight(w, date = todayISO()) {
+  const i = S.bodyLog.findIndex(x => x.date === date);
+  if (i >= 0) S.bodyLog[i].weight = w;
+  else S.bodyLog.unshift({ date, weight: w });
+  S.bodyLog = S.bodyLog.slice(0, 200);
+  save();
 }
 
 export function totalWorkouts() {
