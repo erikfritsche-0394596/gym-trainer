@@ -5,6 +5,14 @@ export const DAYS_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freit
 
 export const MUSCLES = ['Brust', 'Schultern', 'Rücken', 'Lats', 'Bizeps', 'Trizeps', 'Core', 'Quadrizeps', 'Beinbeuger', 'Gesäß', 'Waden', 'Unterarme'];
 
+export const MEAL_SLOTS = [
+  { key: 'shake', label: 'Shake' },
+  { key: 'breakfast', label: 'Frühstück' },
+  { key: 'lunch', label: 'Mittag' },
+  { key: 'dinner', label: 'Abendbrot' },
+  { key: 'snack', label: 'Snacks' },
+];
+
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
