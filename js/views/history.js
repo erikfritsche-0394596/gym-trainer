@@ -5,11 +5,9 @@ import { fmtDate, fmtDur, fmtVol, fmtKg, fromISO, esc } from '../util.js';
 import { openSheet, closeSheet, confirmSheet, toast } from '../components.js';
 import { A } from '../actions.js';
 
-export function render() {
-  const el = document.getElementById('v-history');
+export function historyHTML() {
   if (!S.logs.length) {
-    el.innerHTML = `<div class="empty">${ic('history')}<br>Noch keine Trainings erfasst.<br>Deine abgeschlossenen Workouts landen hier.</div>`;
-    return;
+    return `<div class="empty">${ic('history')}<br>Noch keine Trainings erfasst.<br>Deine abgeschlossenen Workouts landen hier.</div>`;
   }
 
   const html = [];
@@ -34,7 +32,7 @@ export function render() {
       </button>`);
   });
   html.push(`<div class="tc mt16" style="font-size:12.5px;color:var(--t3)">${S.logs.length} Trainings${S.legacyCount ? ` + ${S.legacyCount} aus der alten App` : ''}</div>`);
-  el.innerHTML = html.join('');
+  return html.join('');
 }
 
 A.logDetail = i => {
@@ -69,7 +67,7 @@ A.logDetail = i => {
         if (await confirmSheet('Training löschen?', `Das Training „${esc(log.dayName)}" vom ${fmtDate(log.date)} wird dauerhaft gelöscht.`)) {
           S.logs.splice(i, 1);
           save();
-          render();
+          A.rerender();
           toast('Training gelöscht');
         }
       });

@@ -3,7 +3,7 @@ import { ic } from '../icons.js';
 import { S, save, getPlan, getEx, allExercises, instantiateTemplate, addCustomExercise, refreshExMap, checkAchievements } from '../state.js';
 import { TEMPLATES } from '../data/templates.js';
 import { EQUIPMENT } from '../data/exercises.js';
-import { DAYS, DAYS_LONG, MUSCLES, uid, esc } from '../util.js';
+import { DAYS, DAYS_LONG, MUSCLES, MEAL_SLOTS, uid, esc, todayISO } from '../util.js';
 import { openSheet, closeSheet, toast, confirmSheet } from '../components.js';
 import { unavailableBadgeHTML, markButtonHTML, toggleUnavailableExercise } from './altswap.js';
 import { A } from '../actions.js';
@@ -24,6 +24,8 @@ export function render() {
     else { el.innerHTML = renderDay(p, d); return; }
   }
   el.innerHTML = renderList();
+  const fileInput = document.getElementById('ai-import-file');
+  if (fileInput) fileInput.addEventListener('change', () => A.aiImportFile(fileInput));
 }
 
 // ── Ebene 1: Plan-Liste ──
@@ -50,7 +52,13 @@ function renderList() {
   return `
     ${S.plans.length ? rows : `<div class="empty">${ic('clipboard_list')}<br>Noch keine Pläne.<br>Starte mit einer Vorlage oder baue deinen eigenen.</div>`}
     <button class="btn btn-acc full mt8" onclick="A.planNew('gym')">${ic('plus')} Neuer Gym-Plan</button>
-    <button class="btn full mt8" onclick="A.planNew('home')">${ic('home')} Neuer Zuhause-Plan</button>`;
+    <button class="btn full mt8" onclick="A.planNew('home')">${ic('home')} Neuer Zuhause-Plan</button>
+
+    <div class="slbl">KI-Unterstützung</div>
+    <button class="btn full" onclick="A.aiExport()">${ic('download')} Für KI exportieren</button>
+    <button class="btn full mt8" onclick="document.getElementById('ai-import-file').click()">${ic('upload')} Plan importieren</button>
+    <input type="file" id="ai-import-file" accept=".json,application/json" hidden>
+    <div class="row-sub" style="margin-top:10px">Exportiere den App-Kontext, gib ihn zusammen mit deinem Wunsch einer KI (z. B. Claude oder ChatGPT), importiere die Antwort als neuen Gym-, Zuhause- oder Ernährungsplan.</div>`;
 }
 
 // ── Ebene 2: Plan-Detail ──
@@ -447,4 +455,225 @@ function renameSheet(title, value, onSave) {
       });
     },
   });
+}
+
+// ─── KI-Export/Import ────────────────────────────────────────────────────────
+const AI_INSTRUCTIONS = `Du bekommst hier den kompletten Kontext einer Fitness- und Ernährungs-App ("Gym Trainer 2.0"). Erstelle auf Wunsch des Nutzers einen Trainings- oder Ernährungsplan.
+
+WICHTIG: Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt – kein Fließtext davor oder danach, keine Markdown-Codeblock-Zeichen.
+
+Das Objekt braucht immer ein Feld "typ": "gym-plan", "home-plan" oder "meal-plan". Beispiele für alle drei stehen unten in "formate".
+
+Für "gym-plan"/"home-plan":
+- "weekday": 0=Montag … 6=Sonntag, oder null für keinen festen Tag.
+- "exId" muss exakt eine ID aus "uebungsbibliothek" unten sein (Name als Rückfalloption möglich, ID ist zuverlässiger).
+- "home-plan" darf nur Übungen mit equipment "Körpergewicht" oder einem in "kontext.zuhauseEquipment" gelisteten Equipment verwenden.
+
+Für "meal-plan":
+- Gültige Slot-Namen: shake, breakfast, lunch, dinner, snack.
+- "lebensmittel" in den Zutaten muss ein Name aus "lebensmittel" unten sein – andere Namen werden beim Import ignoriert.
+- In "wochenplan" referenziert ein Eintrag mit "typ":"rezept" ein Rezept aus "rezepte" oben per Name, ein Eintrag mit "typ":"lebensmittel" ein Lebensmittel aus der Bibliothek per Name. "menge" ist bei Rezepten die Portionenzahl, bei Lebensmitteln die Menge in Gramm (bzw. Stück, falls "einheit":"stück").
+- Falls "kontext.naehrwertZiele" gesetzt ist, plane realistische Mengen dafür ein.
+
+Erfinde keine neuen Übungs-IDs — nutze ausschließlich das, was unten aufgeführt ist.`;
+
+const GYM_PLAN_EXAMPLE = {
+  typ: 'gym-plan', name: 'Push Pull Legs',
+  days: [
+    { name: 'Push', weekday: 0, entries: [
+      { exId: 'barbell-bench-press', sets: 4, rMin: 6, rMax: 8, rest: 120 },
+      { exId: 'military-press', sets: 3, rMin: 8, rMax: 10, rest: 90 },
+    ] },
+  ],
+};
+const HOME_PLAN_EXAMPLE = {
+  typ: 'home-plan', name: 'Ganzkörper Zuhause',
+  days: [
+    { name: 'Ganzkörper A', weekday: null, entries: [
+      { exId: 'push-up', sets: 4, rMin: 10, rMax: 20, rest: 60 },
+      { exId: 'goblet-squat', sets: 3, rMin: 10, rMax: 12, rest: 90 },
+    ] },
+  ],
+};
+const MEAL_PLAN_EXAMPLE = {
+  typ: 'meal-plan',
+  rezepte: [
+    { name: 'Hähnchen-Reis-Bowl', portionen: 4, zutaten: [
+      { lebensmittel: 'Hähnchenbrust', menge: 400 },
+      { lebensmittel: 'Reis (gekocht)', menge: 400 },
+    ] },
+  ],
+  wochenplan: [
+    { weekday: 0, slots: { dinner: [{ typ: 'rezept', name: 'Hähnchen-Reis-Bowl', menge: 1 }] } },
+  ],
+};
+
+function buildAiExportPayload() {
+  return {
+    anleitung: AI_INSTRUCTIONS,
+    formate: { gymPlanBeispiel: GYM_PLAN_EXAMPLE, homePlanBeispiel: HOME_PLAN_EXAMPLE, mealPlanBeispiel: MEAL_PLAN_EXAMPLE },
+    kontext: {
+      ziel: S.goal,
+      zuhauseEquipment: S.settings.homeEquipment,
+      naehrwertZiele: S.nutrition.targets,
+    },
+    uebungsbibliothek: allExercises().map(x => ({ id: x.id, name: x.n, muskeln: x.m, equipment: x.eq, koerpergewicht: !!x.bw, zeitbasiert: !!x.t })),
+    lebensmittel: S.nutrition.foods.map(f => ({ name: f.name, einheit: f.unit, kcal: f.kcal100, protein: f.protein100, carbs: f.carbs100, fett: f.fat100 })),
+  };
+}
+
+A.aiExport = () => {
+  const blob = new Blob([JSON.stringify(buildAiExportPayload(), null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `gym-trainer-ki-kontext-${todayISO()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('KI-Kontext exportiert');
+};
+
+// Zahl robust einlesen (auch aus Strings), sonst null
+function num(v) {
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function resolveExId(ref) {
+  if (typeof ref !== 'string' || !ref) return null;
+  if (getEx(ref)) return ref;
+  const match = allExercises().find(x => x.n.toLowerCase() === ref.toLowerCase());
+  return match ? match.id : null;
+}
+
+A.aiImportFile = input => {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    input.value = ''; // erlaubt erneuten Import derselben Datei
+    let data;
+    try { data = JSON.parse(reader.result); } catch (e) { toast('Datei konnte nicht gelesen werden', 'info_circle'); return; }
+    if (!data || typeof data !== 'object' || !['gym-plan', 'home-plan', 'meal-plan'].includes(data.typ)) {
+      toast('Unbekanntes Format', 'info_circle');
+      return;
+    }
+    try {
+      if (data.typ === 'meal-plan') importMealPlan(data);
+      else importGymHomePlan(data);
+    } catch (e) {
+      toast('Import fehlgeschlagen: ungültiges Format', 'info_circle');
+    }
+  };
+  reader.readAsText(file);
+};
+
+async function importGymHomePlan(data) {
+  const kind = data.typ === 'home-plan' ? 'home' : 'gym';
+  const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : (kind === 'home' ? 'KI-Zuhause-Plan' : 'KI-Plan');
+  const srcDays = Array.isArray(data.days) ? data.days : [];
+  let skippedEntries = 0, totalEntries = 0;
+
+  const days = srcDays.map((d, i) => {
+    const wd = Number.isInteger(d.weekday) && d.weekday >= 0 && d.weekday <= 6 ? d.weekday : null;
+    const srcEntries = Array.isArray(d.entries) ? d.entries : [];
+    const entries = [];
+    srcEntries.forEach(en => {
+      totalEntries++;
+      const exId = resolveExId(en.exId) || resolveExId(en.name);
+      if (!exId) { skippedEntries++; return; }
+      const ex = getEx(exId);
+      const sets = num(en.sets) > 0 ? Math.round(num(en.sets)) : 3;
+      const rMin = num(en.rMin) > 0 ? Math.round(num(en.rMin)) : (ex && ex.t ? 30 : 8);
+      const rMax = num(en.rMax) > 0 ? Math.round(num(en.rMax)) : (ex && ex.t ? 30 : 12);
+      const rest = num(en.rest) > 0 ? Math.round(num(en.rest)) : S.settings.rest;
+      entries.push({ id: uid(), exId, sets, rMin, rMax, rest });
+    });
+    const dayName = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : `Tag ${i + 1}`;
+    return { id: uid(), name: dayName, weekday: wd, entries };
+  });
+
+  const importedEntries = totalEntries - skippedEntries;
+  let summary = `${days.length} Trainingstag${days.length === 1 ? '' : 'e'}, ${importedEntries} Übung${importedEntries === 1 ? '' : 'en'} importiert.`;
+  if (skippedEntries) summary += ` ${skippedEntries} nicht gefunden und übersprungen.`;
+
+  if (!(await confirmSheet('Plan importieren?', summary, 'Importieren'))) return;
+
+  const plan = { id: uid(), name, byUser: true, kind, days };
+  S.plans.push(plan);
+  if (kind === 'home') { if (!S.activeHomePlanId) S.activeHomePlanId = plan.id; }
+  else if (!S.activePlanId) S.activePlanId = plan.id;
+  save();
+  checkAchievements();
+  mode = { view: 'plan', planId: plan.id };
+  render();
+  toast('Plan importiert');
+}
+
+async function importMealPlan(data) {
+  const srcRecipes = Array.isArray(data.rezepte) ? data.rezepte : [];
+  let skippedRecipes = 0, skippedIngredients = 0;
+
+  const newRecipes = [];
+  srcRecipes.forEach(r => {
+    const rName = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : null;
+    if (!rName) { skippedRecipes++; return; }
+    const servings = num(r.portionen) > 0 ? Math.round(num(r.portionen)) : 4;
+    const srcIngredients = Array.isArray(r.zutaten) ? r.zutaten : [];
+    const ingredients = [];
+    srcIngredients.forEach(z => {
+      const menge = num(z.menge);
+      const food = typeof z.lebensmittel === 'string'
+        ? S.nutrition.foods.find(f => f.name.toLowerCase() === z.lebensmittel.toLowerCase())
+        : null;
+      if (!menge || menge <= 0 || !food) { skippedIngredients++; return; }
+      ingredients.push({ foodId: food.id, amount: menge });
+    });
+    if (!ingredients.length) { skippedRecipes++; return; }
+    newRecipes.push({ id: uid(), name: rName, servings, ingredients });
+  });
+
+  const byName = new Map(newRecipes.map(r => [r.name.toLowerCase(), r]));
+  const validSlotKeys = new Set(MEAL_SLOTS.map(s => s.key));
+  const srcWeek = Array.isArray(data.wochenplan) ? data.wochenplan : [];
+  let skippedSlots = 0;
+  const weekAdds = [];
+
+  srcWeek.forEach(d => {
+    const wd = Number.isInteger(d.weekday) && d.weekday >= 0 && d.weekday <= 6 ? d.weekday : null;
+    if (wd == null || !d.slots || typeof d.slots !== 'object') return;
+    Object.keys(d.slots).forEach(key => {
+      const arr = Array.isArray(d.slots[key]) ? d.slots[key] : [];
+      if (!validSlotKeys.has(key)) { skippedSlots += arr.length; return; }
+      arr.forEach(en => {
+        const amount = num(en.menge) > 0 ? num(en.menge) : 1;
+        const refName = typeof en.name === 'string' ? en.name.toLowerCase() : '';
+        if (en.typ === 'rezept') {
+          const r = byName.get(refName);
+          if (!r) { skippedSlots++; return; }
+          weekAdds.push({ weekday: wd, slotKey: key, entry: { type: 'recipe', refId: r.id, amount } });
+        } else if (en.typ === 'lebensmittel') {
+          const food = S.nutrition.foods.find(f => f.name.toLowerCase() === refName);
+          if (!food) { skippedSlots++; return; }
+          weekAdds.push({ weekday: wd, slotKey: key, entry: { type: 'food', refId: food.id, amount } });
+        } else {
+          skippedSlots++;
+        }
+      });
+    });
+  });
+
+  let summary = `${newRecipes.length} Rezept${newRecipes.length === 1 ? '' : 'e'}, ${weekAdds.length} Wochenplan-Eintr${weekAdds.length === 1 ? 'ag' : 'äge'} werden hinzugefügt.`;
+  const skippedTotal = skippedRecipes + skippedIngredients + skippedSlots;
+  if (skippedTotal) summary += ` ${skippedTotal} Einträge konnten nicht zugeordnet werden und wurden übersprungen.`;
+
+  if (!(await confirmSheet('Ernährungsplan importieren?', summary, 'Importieren'))) return;
+
+  S.nutrition.recipes.push(...newRecipes);
+  weekAdds.forEach(({ weekday, slotKey, entry }) => {
+    const day = S.nutrition.plan.days.find(x => x.weekday === weekday);
+    if (day) day.slots[slotKey].push(entry);
+  });
+  save();
+  toast('Ernährungsplan importiert');
+  A.tab('nutrition');
 }

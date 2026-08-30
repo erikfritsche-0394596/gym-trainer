@@ -7,7 +7,6 @@ import * as home from './views/home.js';
 import * as plans from './views/plans.js';
 import * as nutrition from './views/nutrition.js';
 import * as stats from './views/stats.js';
-import * as history from './views/history.js';
 import * as player from './views/player.js';
 import * as settings from './views/settings.js';
 
@@ -16,10 +15,9 @@ const TABS = [
   { id: 'plans',     label: 'Pläne',       icon: 'clipboard_list', title: 'Pläne' },
   { id: 'nutrition', label: 'Ernährung',   icon: 'apple',          title: 'Ernährung' },
   { id: 'stats',     label: 'Fortschritt', icon: 'chart_line',     title: 'Fortschritt' },
-  { id: 'history',   label: 'Verlauf',     icon: 'history',        title: 'Verlauf' },
 ];
 
-const VIEWS = { home, plans, nutrition, stats, history };
+const VIEWS = { home, plans, nutrition, stats };
 let current = 'home';
 
 export function switchTab(id) {
