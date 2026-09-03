@@ -6,6 +6,10 @@ let sheetEls = null;
 
 export function openSheet({ title, body, onOpen, onClose }) {
   closeSheet(true);
+  // Absicherung: falls eine vorherige Sheet noch mitten in ihrer Schließ-Animation
+  // steckt (z. B. wenn sehr schnell hintereinander eine neue Sheet geöffnet wird),
+  // nicht doppelt im DOM landen lassen.
+  document.querySelectorAll('.sheet, .sheet-backdrop').forEach(el => el.remove());
   const backdrop = document.createElement('div');
   backdrop.className = 'sheet-backdrop';
   const sheet = document.createElement('div');

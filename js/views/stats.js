@@ -4,12 +4,25 @@ import { S, save, getEx, allExercises, calcStreak, totalWorkouts, muscleSets, e1
 import { toISO, todayISO, addDays, fmtVol, fmtKg, fmtDate, esc, MUSCLES } from '../util.js';
 import { lineChart, wireCharts } from '../charts.js';
 import { toast } from '../components.js';
+import { historyHTML } from './history.js';
 import { A } from '../actions.js';
 
 let selectedEx = null;
+let panel = 'stats'; // ephemer: 'stats' | 'verlauf'
 
 export function render() {
   const el = document.getElementById('v-stats');
+  const seg = `<div class="seg">
+    <button class="${panel === 'stats' ? 'on' : ''}" onclick="A.statsPanel('stats')">${ic('chart_line')} Statistiken</button>
+    <button class="${panel === 'verlauf' ? 'on' : ''}" onclick="A.statsPanel('verlauf')">${ic('history')} Verlauf</button>
+  </div>`;
+  el.innerHTML = seg + (panel === 'verlauf' ? historyHTML() : statsHTML());
+  if (panel !== 'verlauf') wireCharts(el);
+}
+
+A.statsPanel = p => { panel = p; render(); };
+
+function statsHTML() {
   const today = todayISO();
   const weekAgo = toISO(addDays(new Date(), -6));
 
@@ -119,8 +132,7 @@ export function render() {
         <div class="ach-desc">${a.desc}</div>
       </div>`).join('')}</div>`);
 
-  el.innerHTML = html.join('');
-  wireCharts(el);
+  return html.join('');
 }
 
 function bestDefault(list) {

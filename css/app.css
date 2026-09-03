@@ -219,6 +219,13 @@ a { color: var(--acc-text); text-decoration: none; }
 .chip .ic { width: 14px; height: 14px; }
 .chip-acc { background: var(--acc-dim); color: var(--acc-text); }
 .chip-line { background: transparent; border: 1px solid var(--line2); }
+.chip-danger { background: var(--danger-bg); color: var(--danger); }
+
+.ic.sm { width: 14px; height: 14px; vertical-align: -2px; }
+.iconbtn.active { color: var(--danger); border-color: var(--danger); }
+
+.linklike { font-size: 12px; color: var(--acc-text); font-weight: 600; text-decoration: none; }
+.linklike:active { opacity: .7; }
 
 /* ── Heute: Workout-Karte ──────────────────────────────────────────── */
 .hero-card {
@@ -702,6 +709,115 @@ a { color: var(--acc-text); text-decoration: none; }
 .summary-stat { background: var(--s2); border-radius: var(--r-inp); padding: 12px 8px; text-align: center; }
 .summary-stat .num { font-size: 21px; display: block; }
 .summary-stat span:last-child { font-size: 11px; color: var(--t3); font-weight: 600; }
+
+/* ── Segmented Control (Gym/Zuhause) ──────────────────────────────────── */
+.seg {
+  display: flex; background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 3px; margin-bottom: 12px; gap: 2px;
+}
+.seg button {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: 34px; border-radius: var(--r-pill); font-size: 13px; font-weight: 650; color: var(--t2);
+}
+.seg button .ic { width: 15px; height: 15px; }
+.seg button.on { background: var(--acc); color: var(--acc-ink); }
+
+/* ── Hinweis-Banner (Gym-Ausschluss, Gewichts-Erinnerung) ─────────────── */
+.banner {
+  display: flex; gap: 11px; align-items: flex-start;
+  background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-card);
+  padding: 13px 14px; margin-bottom: 8px;
+}
+.banner .ic { width: 19px; height: 19px; flex-shrink: 0; margin-top: 1px; }
+.banner b { font-size: 13.5px; display: block; margin-bottom: 2px; }
+.banner p { font-size: 12px; color: var(--t2); margin: 0; }
+.banner-warn { background: var(--danger-bg); }
+.banner-warn .ic { color: var(--danger); }
+
+/* ── Ziel-Ring (Heute-Ansicht) ─────────────────────────────────────────── */
+.goal-ring-wrap { display: flex; align-items: center; gap: 16px; }
+.goal-ring { position: relative; width: 96px; height: 96px; flex-shrink: 0; }
+.goal-ring svg { transform: rotate(-90deg); }
+.goal-ring-val { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.goal-ring-val b { font-size: 20px; font-weight: 800; line-height: 1; }
+.goal-ring-val span { font-size: 9.5px; color: var(--t3); font-weight: 650; margin-top: 2px; }
+.goal-stats { min-width: 0; }
+.goal-stat-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 5px 0; border-top: 1px solid var(--line); }
+.goal-stat-row:first-child { border-top: none; }
+.goal-stat-row span:first-child { color: var(--t3); }
+.goal-stat-row span:last-child { color: var(--t1); font-weight: 650; }
+
+/* ── Offline-Anleitung (Sheet) ─────────────────────────────────────────── */
+.instr-list { list-style: none; counter-reset: instr; margin: 0; padding: 0; }
+.instr-list li {
+  counter-increment: instr;
+  display: flex; gap: 10px; padding: 11px 0; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--t2); line-height: 1.55;
+}
+.instr-list li:first-child { border-top: none; }
+.instr-list li::before {
+  content: counter(instr);
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--acc-dim); color: var(--acc-text); font-size: 11px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ── Ernährung: Makro-Ringe, Mahlzeiten, Wochenraster, Zutaten, Einkaufen ──── */
+.mring-row { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.mring { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.mring svg { width: 54px; height: 54px; }
+.mring b { font-size: 12px; font-weight: 700; color: var(--t1); }
+.mring span { font-size: 9.5px; color: var(--t3); font-weight: 650; text-transform: uppercase; letter-spacing: .03em; }
+
+.slot-lbl { font-size: 10.5px; color: var(--t3); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 6px; }
+.slot-lbl:first-child { margin-top: 0; }
+
+.meal-row { display: flex; align-items: center; gap: 11px; background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 13px; margin-bottom: 8px; cursor: pointer; }
+.meal-check { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line2); display: flex; align-items: center; justify-content: center; color: transparent; flex-shrink: 0; }
+.meal-check .ic { width: 15px; height: 15px; }
+.meal-row.checked .meal-check { background: var(--acc); border-color: var(--acc); color: var(--acc-ink); }
+.meal-row.checked .meal-name { text-decoration: line-through; color: var(--t3); }
+.meal-main { flex: 1; min-width: 0; }
+.meal-name { font-size: 13.5px; font-weight: 650; }
+.meal-macro { font-size: 11px; color: var(--t3); margin-top: 2px; }
+.meal-kcal { font-size: 13px; font-weight: 700; color: var(--t2); flex-shrink: 0; }
+
+.wk-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; margin-bottom: 13px; }
+.wk-day { background: var(--s1); border: 1px solid var(--line); border-radius: 10px; padding: 7px 3px; text-align: center; }
+.wk-day.full { border-color: var(--acc-text); background: var(--acc-dim); }
+.wk-day-lbl { font-size: 9.5px; color: var(--t3); font-weight: 700; text-transform: uppercase; margin-bottom: 5px; }
+.wk-day-dots { display: flex; justify-content: center; gap: 2px; flex-wrap: wrap; }
+.wk-day-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--s3); display: inline-block; }
+.wk-day.full .wk-day-dots span { background: var(--acc-text); }
+
+.cook-row { background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-card); padding: 13px 14px; margin-bottom: 9px; }
+.cook-head { display: flex; align-items: center; gap: 10px; }
+.cook-name { font-size: 14px; font-weight: 650; flex: 1; }
+.cook-sub { font-size: 12px; color: var(--t2); margin-top: 6px; }
+.cook-prepped { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; color: var(--t2); cursor: pointer; }
+.cook-prepped .box { width: 19px; height: 19px; border-radius: 5px; border: 1.5px solid var(--line2); display: flex; align-items: center; justify-content: center; color: transparent; flex-shrink: 0; }
+.cook-prepped .box .ic { width: 12px; height: 12px; }
+.cook-prepped.on .box { background: var(--acc); border-color: var(--acc); color: var(--acc-ink); }
+
+.ing-row { display: flex; align-items: center; gap: 9px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; margin-bottom: 8px; }
+.ing-main { flex: 1; min-width: 0; }
+.ing-name { font-size: 13px; font-weight: 650; }
+.ing-macro { font-size: 11px; color: var(--t3); margin-top: 1px; }
+.ing-stp { display: flex; align-items: center; background: var(--s2); border: 1px solid var(--line); border-radius: var(--r-pill); flex-shrink: 0; }
+.ing-stp button { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: var(--t2); }
+.ing-stp button .ic { width: 13px; height: 13px; }
+.ing-stp b { min-width: 46px; text-align: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ing-rm { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--t3); flex-shrink: 0; }
+.ing-rm .ic { width: 14px; height: 14px; }
+
+.shop-row { display: flex; align-items: center; gap: 11px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; margin-bottom: 8px; cursor: pointer; }
+.shop-row.checked { opacity: .45; }
+.shop-row.checked .shop-name { text-decoration: line-through; }
+.shop-check { width: 23px; height: 23px; border-radius: 6px; border: 1.5px solid var(--line2); display: flex; align-items: center; justify-content: center; color: transparent; flex-shrink: 0; }
+.shop-check .ic { width: 14px; height: 14px; }
+.shop-row.checked .shop-check { background: var(--acc); border-color: var(--acc); color: var(--acc-ink); }
+.shop-name { font-size: 13.5px; font-weight: 600; flex: 1; }
+.shop-amt { font-size: 12.5px; color: var(--t3); font-weight: 650; }
 
 /* utility */
 .mt8 { margin-top: 8px; } .mt16 { margin-top: 16px; } .mb0 { margin-bottom: 0; }

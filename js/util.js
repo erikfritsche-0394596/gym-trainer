@@ -5,6 +5,14 @@ export const DAYS_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freit
 
 export const MUSCLES = ['Brust', 'Schultern', 'Rücken', 'Lats', 'Bizeps', 'Trizeps', 'Core', 'Quadrizeps', 'Beinbeuger', 'Gesäß', 'Waden', 'Unterarme'];
 
+export const MEAL_SLOTS = [
+  { key: 'shake', label: 'Shake' },
+  { key: 'breakfast', label: 'Frühstück' },
+  { key: 'lunch', label: 'Mittag' },
+  { key: 'dinner', label: 'Abendbrot' },
+  { key: 'snack', label: 'Snacks' },
+];
+
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -22,6 +30,15 @@ export function toISO(d) {
 export function fromISO(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d);
+}
+
+// Ganze Tage zwischen zwei ISO-Daten (bIso - aIso), DST-sicher via UTC-Vergleich —
+// ein lokaler Millisekunden-Vergleich verschiebt sich um 1 Tag, sobald eine
+// Zeitumstellung (z. B. Ende Oktober) zwischen den beiden Daten liegt.
+export function daysBetweenISO(aIso, bIso) {
+  const [ay, am, ad] = aIso.split('-').map(Number);
+  const [by, bm, bd] = bIso.split('-').map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
 }
 
 // Wochentag-Index: Mo=0 … So=6

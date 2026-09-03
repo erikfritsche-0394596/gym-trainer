@@ -1,19 +1,26 @@
 // ─── State: Datenmodell v5, Persistenz, Migration, Abfragen ────────────────
 import { LIBRARY } from './data/exercises.js';
 import { TEMPLATES } from './data/templates.js';
-import { uid, todayISO, toISO, fromISO, addDays, weekdayIdx, e1rm, stepFor } from './util.js';
+import { FOODS } from './data/foods.js';
+import { uid, todayISO, toISO, fromISO, addDays, weekdayIdx, e1rm, stepFor, MEAL_SLOTS } from './util.js';
 
 const KEY = 'gymtrainer_v5';
 const OLD_KEYS = ['gymtrainer_v4', 'gymtrainer_v3'];
 
 function defaultState() {
   return {
-    version: 5,
+    version: 6,
     createdAt: todayISO(),
-    settings: { theme: 'dark', rest: 90, vibrate: true, wakeLock: true, barWeight: 20, exported: false },
+    settings: {
+      theme: 'dark', rest: 90, vibrate: true, wakeLock: true, barWeight: 20, exported: false,
+      homeEquipment: ['Kurzhantel'], // was zuhause tatsächlich vorhanden ist (Körpergewicht ist immer dabei)
+      unavailableExercises: [],      // Übungs-IDs, die im eigenen Gym fehlen
+    },
     customExercises: [],   // eigene Übungen {id,n,m,eq,bw,t,custom:true}
-    plans: [],             // {id,name,byUser,days:[{id,name,weekday,entries:[{id,exId,sets,rMin,rMax,rest}]}]}
+    plans: [],             // {id,name,byUser,kind:'gym'|'home',days:[{id,name,weekday,entries:[{id,exId,sets,rMin,rMax,rest}]}]}
     activePlanId: null,
+    activeHomePlanId: null, // zweiter aktiver Slot, parallel zu activePlanId, für Pläne mit kind:'home'
+    tempSwaps: {},          // { [planEntryId]: altExId } — „nur für dieses Mal“, wird bei Trainingsstart konsumiert
     logs: [],              // neueste zuerst: {id,date,planId,dayId,dayName,duration,vol,entries:[{exId,name,sets:[{w,r,done}]}],prs:[]}
     prs: {},               // exId → {w,r,e1rm,date}
     bodyLog: [],           // neueste zuerst: {date,weight}
@@ -21,7 +28,25 @@ function defaultState() {
     achievements: {},      // achId → ISO-Datum
     legacyCount: 0,        // Workouts aus alter App, die nicht als Detail-Log vorliegen
     session: null,         // laufendes Training
+    goal: null,            // { targetWeight, targetDate, startWeight, startDate } | null
+    nutrition: {
+      targets: { kcal: null, protein: null, carbs: null, fat: null },
+      foods: FOODS.map(f => ({ ...f })),  // Deep-Copy – sonst würde Mutation das Import-Array verändern
+      recipes: [],          // {id,name,servings,ingredients:[{foodId,amount}]}
+      plan: { days: buildDefaultNutritionDays() }, // Wochentag-Vorlage, ein Eintrag pro Wochentag
+      diary: {},            // { [dateISO]: {slots:{...}, extra:[]} }
+      prepped: {},           // { [recipeId]: true } – "diese Woche vorbereitet"
+      shopChecked: {},       // { [foodId]: true } – Einkaufsliste abgehakt
+    },
   };
+}
+
+function buildDefaultNutritionDays() {
+  return Array.from({ length: 7 }, (_, wd) => ({
+    id: uid(),
+    weekday: wd,
+    slots: Object.fromEntries(MEAL_SLOTS.map(s => [s.key, []])),
+  }));
 }
 
 export let S = defaultState();
@@ -36,6 +61,9 @@ export function load() {
     if (raw) {
       S = { ...defaultState(), ...JSON.parse(raw) };
       S.settings = { ...defaultState().settings, ...S.settings };
+      S.nutrition = { ...defaultState().nutrition, ...S.nutrition };
+      S.nutrition.targets = { ...defaultState().nutrition.targets, ...S.nutrition.targets };
+      S.plans.forEach(p => { if (!p.kind) p.kind = 'gym'; });
       return;
     }
     for (const ok of OLD_KEYS) {
@@ -137,6 +165,17 @@ export function addCustomExercise(ex) {
   return ex;
 }
 
+// Alternative mit gleicher Primär-Muskelgruppe, anderem Equipment, nicht selbst als
+// „nicht verfügbar“ markiert — Basis für die „Mein Gym hat das nicht“-Vorschläge.
+export function findAlternatives(exId) {
+  const ex = getEx(exId);
+  if (!ex) return [];
+  return allExercises()
+    .filter(x => x.id !== exId && x.m[0] === ex.m[0] && x.eq !== ex.eq
+      && !S.settings.unavailableExercises.includes(x.id))
+    .sort((a, b) => a.n.localeCompare(b.n));
+}
+
 // ─── Pläne ──────────────────────────────────────────────────────────────────
 export function instantiateTemplate(tid) {
   const t = TEMPLATES.find(x => x.id === tid);
@@ -145,6 +184,7 @@ export function instantiateTemplate(tid) {
     id: uid(),
     name: t.name,
     byUser: false,
+    kind: t.kind || 'gym',
     days: t.days.map(d => ({
       id: uid(),
       name: d.name,
@@ -158,10 +198,21 @@ export function activePlan() {
   return S.plans.find(p => p.id === S.activePlanId) || null;
 }
 
+export function activeHomePlan() {
+  return S.plans.find(p => p.id === S.activeHomePlanId) || null;
+}
+
 export function getPlan(id) { return S.plans.find(p => p.id === id) || null; }
 
 export function todaysDay() {
   const p = activePlan();
+  if (!p) return null;
+  const wd = weekdayIdx();
+  return p.days.find(d => d.weekday === wd) || null;
+}
+
+export function todaysHomeDay() {
+  const p = activeHomePlan();
   if (!p) return null;
   const wd = weekdayIdx();
   return p.days.find(d => d.weekday === wd) || null;
@@ -222,6 +273,145 @@ export function calcStreak() {
     d = addDays(d, -1);
   }
   return streak;
+}
+
+// Körpergewicht für heute eintragen/aktualisieren (Upsert nach Datum)
+export function logBodyWeight(w, date = todayISO()) {
+  const i = S.bodyLog.findIndex(x => x.date === date);
+  if (i >= 0) S.bodyLog[i].weight = w;
+  else S.bodyLog.unshift({ date, weight: w });
+  S.bodyLog = S.bodyLog.slice(0, 200);
+  save();
+}
+
+// ─── Ernährung ──────────────────────────────────────────────────────────────
+export function getFood(id) { return S.nutrition.foods.find(f => f.id === id) || null; }
+export function getRecipe(id) { return S.nutrition.recipes.find(r => r.id === id) || null; }
+
+// Makros pro Portion (Zutaten-Summe ÷ Portionenzahl)
+export function recipeMacros(recipe) {
+  const t = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  for (const ing of recipe.ingredients) {
+    const food = getFood(ing.foodId);
+    if (!food) continue; // gelöschtes Lebensmittel – einfach überspringen
+    const f = food.unit === 'stück' ? ing.amount : ing.amount / 100;
+    t.kcal += food.kcal100 * f;
+    t.protein += food.protein100 * f;
+    t.carbs += food.carbs100 * f;
+    t.fat += food.fat100 * f;
+  }
+  const s = recipe.servings || 1;
+  return { kcal: t.kcal / s, protein: t.protein / s, carbs: t.carbs / s, fat: t.fat / s };
+}
+
+// Makros eines Tagebuch-/Plan-Eintrags {type:'recipe'|'food', refId, amount}
+export function entryMacros(entry) {
+  if (entry.type === 'recipe') {
+    const r = getRecipe(entry.refId);
+    if (!r) return { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+    const per = recipeMacros(r);
+    return {
+      kcal: per.kcal * entry.amount, protein: per.protein * entry.amount,
+      carbs: per.carbs * entry.amount, fat: per.fat * entry.amount,
+    };
+  }
+  const food = getFood(entry.refId);
+  if (!food) return { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  const f = food.unit === 'stück' ? entry.amount : entry.amount / 100;
+  return { kcal: food.kcal100 * f, protein: food.protein100 * f, carbs: food.carbs100 * f, fat: food.fat100 * f };
+}
+
+export function diaryEntries(dateISO) {
+  const day = S.nutrition.diary[dateISO];
+  if (!day) return [];
+  return [...MEAL_SLOTS.flatMap(s => day.slots[s.key]), ...day.extra];
+}
+
+export function diaryMacros(dateISO, { onlyEaten = false } = {}) {
+  const t = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  for (const e of diaryEntries(dateISO)) {
+    if (onlyEaten && !e.eaten) continue;
+    const m = entryMacros(e);
+    t.kcal += m.kcal; t.protein += m.protein; t.carbs += m.carbs; t.fat += m.fat;
+  }
+  return t;
+}
+
+export function nutritionDayForWeekday(wd) {
+  return S.nutrition.plan.days.find(d => d.weekday === wd) || null;
+}
+
+// Tagebuch-Eintrag für ein Datum sicherstellen: beim ersten Öffnen aus der
+// Wochentag-Vorlage kopieren (mit eaten:false) – wird NUR angelegt, wenn er
+// noch fehlt, damit spätere Plan-Änderungen bereits geöffnete Tage nie
+// rückwirkend verändern. Wird ausschließlich mit todayISO() aufgerufen.
+export function ensureDiaryDay(dateISO = todayISO()) {
+  if (S.nutrition.diary[dateISO]) return S.nutrition.diary[dateISO];
+  const planDay = nutritionDayForWeekday(weekdayIdx(fromISO(dateISO)));
+  const slots = {};
+  for (const s of MEAL_SLOTS) {
+    slots[s.key] = ((planDay && planDay.slots[s.key]) || []).map(e => ({ ...e, eaten: false }));
+  }
+  const day = { slots, extra: [] };
+  S.nutrition.diary[dateISO] = day;
+  save();
+  return day;
+}
+
+// Einkaufsliste: Wochenplan-Vorlage wiederholt sich jede Woche identisch,
+// daher keine Datums-Filterung – einfach alle 7 Tage aufsummieren.
+export function weekShoppingList() {
+  const servingsNeeded = {}; // recipeId -> Summe der geplanten Portionen
+  const rawFoodTotals = {};  // foodId -> Summe der Menge (nicht Batch-skaliert)
+  for (const day of S.nutrition.plan.days) {
+    for (const s of MEAL_SLOTS) {
+      for (const entry of day.slots[s.key]) {
+        if (entry.type === 'recipe') {
+          servingsNeeded[entry.refId] = (servingsNeeded[entry.refId] || 0) + entry.amount;
+        } else {
+          rawFoodTotals[entry.refId] = (rawFoodTotals[entry.refId] || 0) + entry.amount;
+        }
+      }
+    }
+  }
+  const merged = {};
+  for (const [recipeId, needed] of Object.entries(servingsNeeded)) {
+    const recipe = getRecipe(recipeId);
+    if (!recipe) continue;
+    const batches = Math.ceil(needed / (recipe.servings || 1));
+    for (const ing of recipe.ingredients) {
+      merged[ing.foodId] = (merged[ing.foodId] || 0) + ing.amount * batches;
+    }
+  }
+  for (const [foodId, amt] of Object.entries(rawFoodTotals)) {
+    merged[foodId] = (merged[foodId] || 0) + amt;
+  }
+  return Object.entries(merged)
+    .map(([foodId, amount]) => {
+      const f = getFood(foodId);
+      return f ? { foodId, foodName: f.name, totalAmount: Math.round(amount), unit: f.unit } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.foodName.localeCompare(b.foodName));
+}
+
+// Wie oft wird ein Rezept diese Woche geplant benötigt, und wie oft muss dafür gekocht werden?
+export function recipeCookPlan() {
+  const servingsNeeded = {};
+  for (const day of S.nutrition.plan.days) {
+    for (const s of MEAL_SLOTS) {
+      for (const entry of day.slots[s.key]) {
+        if (entry.type === 'recipe') servingsNeeded[entry.refId] = (servingsNeeded[entry.refId] || 0) + entry.amount;
+      }
+    }
+  }
+  return Object.entries(servingsNeeded).map(([recipeId, needed]) => {
+    const recipe = getRecipe(recipeId);
+    if (!recipe) return null;
+    const servings = recipe.servings || 1;
+    const batches = Math.ceil(needed / servings);
+    return { recipeId, name: recipe.name, needed, batches, yieldServings: batches * servings };
+  }).filter(Boolean);
 }
 
 export function totalWorkouts() {
