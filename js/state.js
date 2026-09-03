@@ -2,7 +2,7 @@
 import { LIBRARY } from './data/exercises.js';
 import { TEMPLATES } from './data/templates.js';
 import { FOODS } from './data/foods.js';
-import { uid, todayISO, toISO, fromISO, addDays, weekdayIdx, e1rm, stepFor, MEAL_SLOTS } from './util.js';
+import { uid, todayISO, toISO, fromISO, addDays, weekdayIdx, weekStartISO, e1rm, stepFor, MEAL_SLOTS } from './util.js';
 
 const KEY = 'gymtrainer_v5';
 const OLD_KEYS = ['gymtrainer_v4', 'gymtrainer_v3'];
@@ -32,22 +32,18 @@ function defaultState() {
     nutrition: {
       targets: { kcal: null, protein: null, carbs: null, fat: null },
       foods: FOODS.map(f => ({ ...f })),  // Deep-Copy – sonst würde Mutation das Import-Array verändern
-      recipes: [],          // {id,name,servings,ingredients:[{foodId,amount}]}
-      plan: { days: buildDefaultNutritionDays() }, // Wochentag-Vorlage, ein Eintrag pro Wochentag
-      diary: {},            // { [dateISO]: {slots:{...}, extra:[]} }
-      prepped: {},           // { [recipeId]: true } – "diese Woche vorbereitet"
-      shopChecked: {},       // { [foodId]: true } – Einkaufsliste abgehakt
+      recipes: [],        // {id,name,servings,ingredients:[{foodId,amount}],instructions,freshDaily}
+      weeks: {},          // { [weekStartISO]: { days: [{weekday,slots:{shake:[],...}} × 7] } } – unabhängige, datierte Wochen
+      eaten: {},          // { [dateISO]: { [entryId]: true } }
+      extra: {},          // { [dateISO]: [{id,type,refId,amount}] } – Spontan-Einträge pro Datum
+      prepped: {},        // { [recipeId]: true } – "diese Woche vorbereitet"
+      shopChecked: {},    // { [weekStartISO]: { [foodId]: true } } – Einkaufsliste abgehakt, pro Woche
     },
   };
 }
 
-function buildDefaultNutritionDays() {
-  return Array.from({ length: 7 }, (_, wd) => ({
-    id: uid(),
-    weekday: wd,
-    slots: Object.fromEntries(MEAL_SLOTS.map(s => [s.key, []])),
-  }));
-}
+function emptySlots() { return Object.fromEntries(MEAL_SLOTS.map(s => [s.key, []])); }
+function emptyWeekDays() { return Array.from({ length: 7 }, (_, wd) => ({ weekday: wd, slots: emptySlots() })); }
 
 export let S = defaultState();
 
@@ -63,6 +59,7 @@ export function load() {
       S.settings = { ...defaultState().settings, ...S.settings };
       S.nutrition = { ...defaultState().nutrition, ...S.nutrition };
       S.nutrition.targets = { ...defaultState().nutrition.targets, ...S.nutrition.targets };
+      migrateNutritionWeeks();
       S.plans.forEach(p => { if (!p.kind) p.kind = 'gym'; });
       return;
     }
@@ -75,6 +72,41 @@ export function load() {
       }
     }
   } catch (e) { S = defaultState(); }
+}
+
+// Alte Ernährungs-Struktur (eine sich wiederholende Wochenvorlage + einmalig
+// geseedetes Tagebuch) auf mehrere unabhängige, datierte Wochen ummodeln.
+// Eigenes try/catch: ein Fehler hier darf nicht den GESAMTEN State über
+// load()s äußeres catch zurücksetzen (Logs, PRs, Trainingspläne wären sonst
+// mit betroffen). Prüft bewusst auf Vorhandensein des ALTEN Keys (nicht auf
+// Fehlen des neuen) und löscht ihn danach – das macht die Prüfung selbst
+// über mehrfaches load() hinweg idempotent.
+function migrateNutritionWeeks() {
+  try {
+    if (S.nutrition.plan) {
+      const ws = weekStartISO(todayISO());
+      S.nutrition.weeks = { [ws]: { days: S.nutrition.plan.days.map(d => ({
+        weekday: d.weekday,
+        slots: Object.fromEntries(MEAL_SLOTS.map(s => [s.key, (d.slots[s.key] || []).map(e => ({ ...e, id: uid() }))])),
+      })) } };
+      delete S.nutrition.plan;
+    }
+    if (S.nutrition.diary) {
+      S.nutrition.extra = {};
+      Object.entries(S.nutrition.diary).forEach(([date, day]) => {
+        S.nutrition.extra[date] = (day.extra || []).map(e => ({ id: uid(), type: e.type, refId: e.refId, amount: e.amount }));
+      });
+      delete S.nutrition.diary;
+    }
+    S.nutrition.eaten = S.nutrition.eaten || {};
+    // Alte Form war flach ({foodId: true}); neue Form ist pro Woche verschachtelt.
+    // Lässt sich nicht sicher ummappen (welche Woche?) – einmalig zurücksetzen.
+    if (S.nutrition.shopChecked && Object.values(S.nutrition.shopChecked).some(v => v === true)) {
+      S.nutrition.shopChecked = {};
+    }
+  } catch (e) {
+    S.nutrition.weeks = S.nutrition.weeks || {};
+  }
 }
 
 // ─── Migration aus gymtrainer_v3/v4 ─────────────────────────────────────────
@@ -321,15 +353,34 @@ export function entryMacros(entry) {
   return { kcal: food.kcal100 * f, protein: food.protein100 * f, carbs: food.carbs100 * f, fat: food.fat100 * f };
 }
 
-export function diaryEntries(dateISO) {
-  const day = S.nutrition.diary[dateISO];
-  if (!day) return [];
-  return [...MEAL_SLOTS.flatMap(s => day.slots[s.key]), ...day.extra];
+// ── Wochen: lesen vs. schreiben getrennt, damit bloßes Ansehen einer (auch
+// leeren) Woche sie nie dauerhaft materialisiert (sonst genau der Stale-/
+// Aufbläh-Bug, der die alte Tagebuch-Logik schon hatte, nur eine Ebene höher) ──
+export function weekDayFor(ws, wd) {
+  const week = S.nutrition.weeks[ws];
+  return (week && week.days.find(d => d.weekday === wd)) || { weekday: wd, slots: emptySlots() };
 }
 
-export function diaryMacros(dateISO, { onlyEaten = false } = {}) {
+// Nur aus Aktionen aufrufen, die wirklich Inhalt in die Woche schreiben wollen.
+export function ensureWeek(ws) {
+  if (!S.nutrition.weeks[ws]) S.nutrition.weeks[ws] = { days: emptyWeekDays() };
+  return S.nutrition.weeks[ws];
+}
+
+// Live-Einträge für ein Datum – kein Snapshot, spiegelt immer den aktuellen
+// Plan der jeweiligen Woche wider.
+export function dayEntries(dateISO) {
+  const ws = weekStartISO(dateISO);
+  const day = weekDayFor(ws, weekdayIdx(fromISO(dateISO)));
+  const eatenMap = S.nutrition.eaten[dateISO] || {};
+  const slotEntries = MEAL_SLOTS.flatMap(s => day.slots[s.key].map(e => ({ ...e, slotKey: s.key, eaten: !!eatenMap[e.id] })));
+  const extraEntries = (S.nutrition.extra[dateISO] || []).map(e => ({ ...e, slotKey: 'extra', eaten: !!eatenMap[e.id] }));
+  return [...slotEntries, ...extraEntries];
+}
+
+export function dayMacros(dateISO, { onlyEaten = false } = {}) {
   const t = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
-  for (const e of diaryEntries(dateISO)) {
+  for (const e of dayEntries(dateISO)) {
     if (onlyEaten && !e.eaten) continue;
     const m = entryMacros(e);
     t.kcal += m.kcal; t.protein += m.protein; t.carbs += m.carbs; t.fat += m.fat;
@@ -337,39 +388,36 @@ export function diaryMacros(dateISO, { onlyEaten = false } = {}) {
   return t;
 }
 
-export function nutritionDayForWeekday(wd) {
-  return S.nutrition.plan.days.find(d => d.weekday === wd) || null;
+export function toggleEaten(dateISO, entryId) {
+  const map = S.nutrition.eaten[dateISO] || (S.nutrition.eaten[dateISO] = {});
+  if (map[entryId]) delete map[entryId]; else map[entryId] = true;
 }
 
-// Tagebuch-Eintrag für ein Datum sicherstellen: beim ersten Öffnen aus der
-// Wochentag-Vorlage kopieren (mit eaten:false) – wird NUR angelegt, wenn er
-// noch fehlt, damit spätere Plan-Änderungen bereits geöffnete Tage nie
-// rückwirkend verändern. Wird ausschließlich mit todayISO() aufgerufen.
-export function ensureDiaryDay(dateISO = todayISO()) {
-  if (S.nutrition.diary[dateISO]) return S.nutrition.diary[dateISO];
-  const planDay = nutritionDayForWeekday(weekdayIdx(fromISO(dateISO)));
-  const slots = {};
-  for (const s of MEAL_SLOTS) {
-    slots[s.key] = ((planDay && planDay.slots[s.key]) || []).map(e => ({ ...e, eaten: false }));
+export function removeEntry(dateISO, slotKey, entryId) {
+  if (slotKey === 'extra') {
+    S.nutrition.extra[dateISO] = (S.nutrition.extra[dateISO] || []).filter(e => e.id !== entryId);
+    return;
   }
-  const day = { slots, extra: [] };
-  S.nutrition.diary[dateISO] = day;
-  save();
-  return day;
+  const day = weekDayFor(weekStartISO(dateISO), weekdayIdx(fromISO(dateISO)));
+  day.slots[slotKey] = day.slots[slotKey].filter(e => e.id !== entryId);
 }
 
-// Einkaufsliste: Wochenplan-Vorlage wiederholt sich jede Woche identisch,
-// daher keine Datums-Filterung – einfach alle 7 Tage aufsummieren.
-export function weekShoppingList() {
+// Einkaufsliste für eine bestimmte Woche. Enthält AUCH Zutaten von als
+// "täglich frisch" markierten Rezepten (die werden nur von recipeCookPlan
+// ausgenommen, nicht vom Einkauf – die Zutaten müssen trotzdem besorgt werden).
+export function weekShoppingList(ws) {
+  const week = S.nutrition.weeks[ws];
   const servingsNeeded = {}; // recipeId -> Summe der geplanten Portionen
   const rawFoodTotals = {};  // foodId -> Summe der Menge (nicht Batch-skaliert)
-  for (const day of S.nutrition.plan.days) {
-    for (const s of MEAL_SLOTS) {
-      for (const entry of day.slots[s.key]) {
-        if (entry.type === 'recipe') {
-          servingsNeeded[entry.refId] = (servingsNeeded[entry.refId] || 0) + entry.amount;
-        } else {
-          rawFoodTotals[entry.refId] = (rawFoodTotals[entry.refId] || 0) + entry.amount;
+  if (week) {
+    for (const day of week.days) {
+      for (const s of MEAL_SLOTS) {
+        for (const entry of day.slots[s.key]) {
+          if (entry.type === 'recipe') {
+            servingsNeeded[entry.refId] = (servingsNeeded[entry.refId] || 0) + entry.amount;
+          } else {
+            rawFoodTotals[entry.refId] = (rawFoodTotals[entry.refId] || 0) + entry.amount;
+          }
         }
       }
     }
@@ -395,10 +443,14 @@ export function weekShoppingList() {
     .sort((a, b) => a.foodName.localeCompare(b.foodName));
 }
 
-// Wie oft wird ein Rezept diese Woche geplant benötigt, und wie oft muss dafür gekocht werden?
-export function recipeCookPlan() {
+// Wie oft wird ein Rezept in dieser Woche geplant benötigt, und wie oft muss
+// dafür gekocht werden? "Täglich frisch"-Rezepte werden bewusst ausgenommen –
+// die brauchen keine Portionen-/Batch-Vorbereitung.
+export function recipeCookPlan(ws) {
+  const week = S.nutrition.weeks[ws];
+  if (!week) return [];
   const servingsNeeded = {};
-  for (const day of S.nutrition.plan.days) {
+  for (const day of week.days) {
     for (const s of MEAL_SLOTS) {
       for (const entry of day.slots[s.key]) {
         if (entry.type === 'recipe') servingsNeeded[entry.refId] = (servingsNeeded[entry.refId] || 0) + entry.amount;
@@ -407,11 +459,19 @@ export function recipeCookPlan() {
   }
   return Object.entries(servingsNeeded).map(([recipeId, needed]) => {
     const recipe = getRecipe(recipeId);
-    if (!recipe) return null;
+    if (!recipe || recipe.freshDaily) return null;
     const servings = recipe.servings || 1;
     const batches = Math.ceil(needed / servings);
     return { recipeId, name: recipe.name, needed, batches, yieldServings: batches * servings };
   }).filter(Boolean);
+}
+
+// Alle Wochen ab der aktuellen, für die es etwas einzukaufen gibt (sortiert).
+export function plannedWeeks() {
+  const start = weekStartISO(todayISO());
+  return Object.keys(S.nutrition.weeks)
+    .filter(ws => ws >= start && weekShoppingList(ws).length > 0)
+    .sort();
 }
 
 export function totalWorkouts() {

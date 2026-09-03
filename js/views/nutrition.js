@@ -1,18 +1,23 @@
-// ─── Ernährung: Heute, Wochenplan, Einkaufsliste, Rezepte, Lebensmittel ─────
+// ─── Ernährung: Heute, Wochenplan (mehrwöchig), Einkaufsliste, Rezepte, Lebensmittel ─
 import { ic } from '../icons.js';
 import {
-  S, save, getFood, getRecipe, recipeMacros, entryMacros, diaryMacros,
-  nutritionDayForWeekday, ensureDiaryDay, weekShoppingList, recipeCookPlan,
+  S, save, getFood, getRecipe, recipeMacros, entryMacros,
+  weekDayFor, ensureWeek, dayEntries, dayMacros, toggleEaten, removeEntry,
+  weekShoppingList, recipeCookPlan, plannedWeeks,
 } from '../state.js';
-import { MEAL_SLOTS, DAYS, DAYS_LONG, todayISO, daysBetweenISO, fmtDate, fmtKg, esc, uid } from '../util.js';
+import {
+  MEAL_SLOTS, DAYS, DAYS_LONG, todayISO, daysBetweenISO, weekStartISO,
+  toISO, fromISO, addDays, fmtDate, fmtKg, esc, uid,
+} from '../util.js';
 import { openSheet, closeSheet, toast, confirmSheet } from '../components.js';
 import { A } from '../actions.js';
 
 let panel = 'heute'; // ephemer: 'heute' | 'woche' | 'einkaufen'
+let currentWeekStart = weekStartISO(todayISO()); // ephemer, welche Woche im "Woche"-Panel angezeigt wird
+let expandedWeeks = null; // ephemer, Set der aufgeklappten Wochen im "Einkaufen"-Akkordeon (lazy init)
 
 export function render() {
   const el = document.getElementById('v-nutrition');
-  ensureDiaryDay(todayISO());
   const html = [`
     <div class="seg">
       <button class="${panel === 'heute' ? 'on' : ''}" onclick="A.nutPanel('heute')">${ic('barbell')} Heute</button>
@@ -44,6 +49,8 @@ function mringHTML(val, target, color, label, unit) {
 }
 
 // ─── Heute ───────────────────────────────────────────────────────────────────
+// Liest live aus der aktuellen Woche (kein Snapshot mehr) — Änderungen am
+// Wochenplan erscheinen sofort, auch wenn "Heute" vorher schon angesehen wurde.
 function heutePanelHTML() {
   const today = todayISO();
   const t = S.nutrition.targets;
@@ -57,7 +64,7 @@ function heutePanelHTML() {
         ${ic('chevron_right')}
       </button>`);
   } else {
-    const eaten = diaryMacros(today, { onlyEaten: true });
+    const eaten = dayMacros(today, { onlyEaten: true });
     html.push(`
       <div class="card">
         <div class="mring-row">
@@ -73,55 +80,53 @@ function heutePanelHTML() {
       </div>`);
   }
 
-  const day = ensureDiaryDay(today);
+  const entries = dayEntries(today);
   MEAL_SLOTS.forEach(slot => {
-    const entries = day.slots[slot.key];
+    const slotEntries = entries.filter(e => e.slotKey === slot.key);
     html.push(`<div class="slot-lbl">${slot.label}</div>`);
-    html.push(entries.length
-      ? entries.map((e, i) => mealRowHTML(e, slot.key, i)).join('')
+    html.push(slotEntries.length
+      ? slotEntries.map(e => mealRowHTML(e)).join('')
       : `<div class="row-sub" style="margin-bottom:8px">Nichts geplant</div>`);
   });
-  if (day.extra.length) {
+  const extraEntries = entries.filter(e => e.slotKey === 'extra');
+  if (extraEntries.length) {
     html.push(`<div class="slot-lbl">Sonstiges</div>`);
-    html.push(day.extra.map((e, i) => mealRowHTML(e, 'extra', i)).join(''));
+    html.push(extraEntries.map(e => mealRowHTML(e)).join(''));
   }
   html.push(`<button class="btn btn-ghost full" style="margin-top:8px" onclick="A.nutAddAdhoc()">${ic('plus')} Spontan hinzufügen</button>`);
   return html.join('');
 }
 
-function mealRowHTML(entry, slotKey, idx) {
+function mealRowHTML(entry) {
   const ref = entry.type === 'recipe' ? getRecipe(entry.refId) : getFood(entry.refId);
   const m = entryMacros(entry);
   const nameHTML = ref ? esc(ref.name) : '<span class="chip chip-danger">Gelöscht</span>';
   return `
-    <div class="meal-row${entry.eaten ? ' checked' : ''}" onclick="A.nutToggleEaten('${slotKey}',${idx})">
+    <div class="meal-row${entry.eaten ? ' checked' : ''}" onclick="A.nutToggleEaten('${entry.id}')">
       <div class="meal-check">${ic('check')}</div>
       <div class="meal-main"><div class="meal-name">${nameHTML}</div><div class="meal-macro">${Math.round(m.protein)}P / ${Math.round(m.carbs)}C / ${Math.round(m.fat)}F</div></div>
       <div class="meal-kcal">${Math.round(m.kcal)}</div>
-      <button class="iconbtn" style="width:28px;height:28px;background:none;border:none;flex-shrink:0" onclick="event.stopPropagation();A.nutRemoveEntry('${slotKey}',${idx})" aria-label="Entfernen">${ic('x')}</button>
+      <button class="iconbtn" style="width:28px;height:28px;background:none;border:none;flex-shrink:0" onclick="event.stopPropagation();A.nutRemoveEntry('${entry.slotKey}','${entry.id}')" aria-label="Entfernen">${ic('x')}</button>
     </div>`;
 }
 
-A.nutToggleEaten = (slotKey, idx) => {
-  const day = ensureDiaryDay(todayISO());
-  const arr = slotKey === 'extra' ? day.extra : day.slots[slotKey];
-  arr[idx].eaten = !arr[idx].eaten;
+A.nutToggleEaten = entryId => {
+  toggleEaten(todayISO(), entryId);
   save();
   render();
 };
 
-A.nutRemoveEntry = (slotKey, idx) => {
-  const day = ensureDiaryDay(todayISO());
-  const arr = slotKey === 'extra' ? day.extra : day.slots[slotKey];
-  arr.splice(idx, 1);
+A.nutRemoveEntry = (slotKey, entryId) => {
+  removeEntry(todayISO(), slotKey, entryId);
   save();
   render();
 };
 
 A.nutAddAdhoc = () => {
   openEntryPicker(entry => {
-    const day = ensureDiaryDay(todayISO());
-    day.extra.push({ ...entry, eaten: false });
+    const today = todayISO();
+    const list = S.nutrition.extra[today] || (S.nutrition.extra[today] = []);
+    list.push({ id: uid(), ...entry });
     save();
     render();
     toast('Hinzugefügt');
@@ -129,30 +134,54 @@ A.nutAddAdhoc = () => {
 };
 
 // ─── Woche ───────────────────────────────────────────────────────────────────
+function weekRangeLabel(ws) {
+  return `${fmtDate(ws)} – ${fmtDate(toISO(addDays(fromISO(ws), 6)))}`;
+}
+
 function wochePanelHTML() {
+  const ws = currentWeekStart;
+  const isCurrentWeek = ws === weekStartISO(todayISO());
   const html = [];
-  html.push(`<div class="slbl">Diese Woche geplant</div>`);
+
+  html.push(`
+    <div class="flex" style="margin-bottom:10px">
+      <button class="iconbtn" style="width:38px;height:38px" onclick="A.nutWeekNav(-1)" aria-label="Vorherige Woche">${ic('chevron_left')}</button>
+      <div class="grow tc">
+        <div class="row-title">${weekRangeLabel(ws)}</div>
+        ${isCurrentWeek ? '<span class="chip chip-acc">Diese Woche</span>' : ''}
+      </div>
+      <button class="iconbtn" style="width:38px;height:38px" onclick="A.nutWeekNav(1)" aria-label="Nächste Woche">${ic('chevron_right')}</button>
+    </div>`);
+  if (!isCurrentWeek) {
+    html.push(`<button class="btn btn-ghost full sm" style="margin-bottom:10px" onclick="A.nutWeekJumpToday()">${ic('calendar')} Zu dieser Woche</button>`);
+  }
+
+  html.push(`<div class="slbl">Geplant</div>`);
   html.push(`<div class="wk-grid">${DAYS.map((label, wd) => {
-    const day = nutritionDayForWeekday(wd);
-    const filled = day ? MEAL_SLOTS.reduce((n, s) => n + (day.slots[s.key].length ? 1 : 0), 0) : 0;
+    const day = weekDayFor(ws, wd);
+    const filled = MEAL_SLOTS.reduce((n, s) => n + (day.slots[s.key].length ? 1 : 0), 0);
     const dots = Array.from({ length: Math.max(filled, 1) }).map(() => '<span></span>').join('');
     return `<div class="wk-day${filled ? ' full' : ''}"><div class="wk-day-lbl">${label}</div><div class="wk-day-dots">${dots}</div></div>`;
   }).join('')}</div>`);
-  html.push(`<button class="btn full" onclick="A.nutEditWeek()">${ic('pencil')} Wochenplan bearbeiten</button>`);
+  html.push(`<button class="btn full" onclick="A.nutEditWeek('${ws}')">${ic('pencil')} Wochenplan bearbeiten</button>`);
+  html.push(`<button class="btn btn-ghost full mt8" onclick="A.nutCopyWeekForward('${ws}')">${ic('copy')} In Folgewoche kopieren</button>`);
 
-  const cookPlan = recipeCookPlan();
+  const cookPlan = recipeCookPlan(ws);
   html.push(`<div class="slbl">Diese Woche kochen</div>`);
   if (!cookPlan.length) {
-    html.push(`<div class="row-sub" style="margin-bottom:8px">Noch keine Rezepte im Wochenplan.</div>`);
+    html.push(`<div class="row-sub" style="margin-bottom:8px">Noch keine Rezepte im Wochenplan (oder alle als „täglich frisch" markiert).</div>`);
   } else {
     cookPlan.forEach(c => {
       const prepped = !!S.nutrition.prepped[c.recipeId];
       const rest = c.yieldServings > c.needed ? `, ${c.yieldServings - c.needed} übrig` : '';
       html.push(`
         <div class="cook-row">
-          <div class="cook-head"><div class="cook-name">${esc(c.name)}</div><span class="chip chip-acc">${c.needed}× geplant</span></div>
+          <div class="cook-head">
+            <button class="cook-name" onclick="A.nutRecipeForm('${c.recipeId}')">${esc(c.name)}</button>
+            <span class="chip chip-acc">${c.needed}× geplant</span>
+          </div>
           <div class="cook-sub">→ ${c.batches}× kochen (ergibt ${c.yieldServings} Portionen${rest})</div>
-          <div class="cook-prepped${prepped ? ' on' : ''}" onclick="A.nutTogglePrepped('${c.recipeId}')"><div class="box">${ic('check')}</div>Vorbereitet</div>
+          <button class="cook-prepped${prepped ? ' on' : ''}" onclick="A.nutTogglePrepped('${c.recipeId}')"><div class="box">${ic('check')}</div>Vorbereitet</button>
         </div>`);
     });
   }
@@ -163,67 +192,96 @@ function wochePanelHTML() {
   return html.join('');
 }
 
+A.nutWeekNav = delta => { currentWeekStart = toISO(addDays(fromISO(currentWeekStart), delta * 7)); render(); };
+A.nutWeekJumpToday = () => { currentWeekStart = weekStartISO(todayISO()); render(); };
+
 A.nutTogglePrepped = recipeId => {
   S.nutrition.prepped[recipeId] = !S.nutrition.prepped[recipeId];
   save();
   render();
 };
 
+function weekEntryCount(ws) {
+  const week = S.nutrition.weeks[ws];
+  if (!week) return 0;
+  return week.days.reduce((n, d) => n + MEAL_SLOTS.reduce((m, s) => m + d.slots[s.key].length, 0), 0);
+}
+
+A.nutCopyWeekForward = async ws => {
+  const targetWs = toISO(addDays(fromISO(ws), 7));
+  if (weekEntryCount(targetWs) > 0) {
+    if (!(await confirmSheet('Folgewoche hat bereits Einträge', 'Die kopierten Gerichte werden ergänzt, nicht überschrieben. Trotzdem fortfahren?', 'Kopieren'))) return;
+  }
+  const srcWeek = ensureWeek(ws);
+  const targetWeek = ensureWeek(targetWs);
+  srcWeek.days.forEach(srcDay => {
+    const tgtDay = targetWeek.days.find(d => d.weekday === srcDay.weekday);
+    MEAL_SLOTS.forEach(s => {
+      srcDay.slots[s.key].forEach(e => tgtDay.slots[s.key].push({ ...e, id: uid() }));
+    });
+  });
+  save();
+  currentWeekStart = targetWs;
+  render();
+  toast('Woche kopiert');
+};
+
 // ── Wochenplan-Editor: Tage-Liste → Tag-Detail mit 5 Slots ──
-A.nutEditWeek = () => {
+A.nutEditWeek = ws => {
   openSheet({
-    title: 'Wochenplan',
+    title: `Wochenplan · ${weekRangeLabel(ws)}`,
     body: DAYS_LONG.map((label, wd) => {
-      const day = nutritionDayForWeekday(wd);
+      const day = weekDayFor(ws, wd);
       const filled = MEAL_SLOTS.reduce((n, s) => n + day.slots[s.key].length, 0);
-      return `<button class="row" onclick="A.nutOpenDay('${day.id}')"><div class="row-main"><div class="row-title">${label}</div><div class="row-sub">${filled} Einträge</div></div>${ic('chevron_right')}</button>`;
+      return `<button class="row" onclick="A.nutOpenDay('${ws}',${wd})"><div class="row-main"><div class="row-title">${label}</div><div class="row-sub">${filled} Einträge</div></div>${ic('chevron_right')}</button>`;
     }).join(''),
   });
 };
 
-A.nutOpenDay = dayId => {
-  const day = S.nutrition.plan.days.find(d => d.id === dayId);
-  if (!day) return;
+A.nutOpenDay = (ws, wd) => {
+  const day = weekDayFor(ws, wd);
   openSheet({
-    title: DAYS_LONG[day.weekday],
+    title: DAYS_LONG[wd],
     body: MEAL_SLOTS.map(slot => {
       const entries = day.slots[slot.key];
-      const rows = entries.map((e, i) => planEntryRowHTML(e, day.id, slot.key, i)).join('')
+      const rows = entries.map(e => planEntryRowHTML(e, ws, wd, slot.key)).join('')
         || `<div class="row-sub" style="margin-bottom:6px">Nichts geplant</div>`;
       return `
         <div class="slbl">${slot.label}</div>
         ${rows}
-        <button class="btn btn-ghost full sm" style="margin-bottom:8px" onclick="A.nutSlotAdd('${day.id}','${slot.key}')">${ic('plus')} Hinzufügen</button>`;
+        <button class="btn btn-ghost full sm" style="margin-bottom:8px" onclick="A.nutSlotAdd('${ws}',${wd},'${slot.key}')">${ic('plus')} Hinzufügen</button>`;
     }).join(''),
   });
 };
 
-function planEntryRowHTML(entry, dayId, slotKey, idx) {
+function planEntryRowHTML(entry, ws, wd, slotKey) {
   const ref = entry.type === 'recipe' ? getRecipe(entry.refId) : getFood(entry.refId);
   const nameHTML = ref ? esc(ref.name) : '<span class="chip chip-danger">Gelöscht</span>';
   const amountLbl = entry.type === 'recipe' ? `${entry.amount}× Portion` : `${entry.amount}${ref && ref.unit === 'stück' ? ' Stück' : 'g'}`;
   return `
     <div class="entry-row">
       <div class="entry-main"><div class="entry-name">${nameHTML}</div><div class="entry-sub">${amountLbl}</div></div>
-      <div class="entry-actions"><button class="iconbtn" onclick="A.nutSlotRemove('${dayId}','${slotKey}',${idx})" aria-label="Entfernen">${ic('trash')}</button></div>
+      <div class="entry-actions"><button class="iconbtn" onclick="A.nutSlotRemove('${ws}',${wd},'${slotKey}','${entry.id}')" aria-label="Entfernen">${ic('trash')}</button></div>
     </div>`;
 }
 
-A.nutSlotAdd = (dayId, slotKey) => {
+A.nutSlotAdd = (ws, wd, slotKey) => {
   openEntryPicker(entry => {
-    const day = S.nutrition.plan.days.find(d => d.id === dayId);
-    day.slots[slotKey].push(entry);
+    const week = ensureWeek(ws);
+    const day = week.days.find(d => d.weekday === wd);
+    day.slots[slotKey].push({ id: uid(), ...entry });
     save();
-    A.nutOpenDay(dayId);
+    A.nutOpenDay(ws, wd);
     toast('Hinzugefügt');
   });
 };
 
-A.nutSlotRemove = (dayId, slotKey, idx) => {
-  const day = S.nutrition.plan.days.find(d => d.id === dayId);
-  day.slots[slotKey].splice(idx, 1);
+A.nutSlotRemove = (ws, wd, slotKey, entryId) => {
+  const week = ensureWeek(ws);
+  const day = week.days.find(d => d.weekday === wd);
+  day.slots[slotKey] = day.slots[slotKey].filter(e => e.id !== entryId);
   save();
-  A.nutOpenDay(dayId);
+  A.nutOpenDay(ws, wd);
 };
 
 // ── Gemeinsamer Rezept-oder-Lebensmittel-Picker ──
@@ -276,7 +334,7 @@ A.nutRecipesManage = () => {
       <button class="btn btn-acc full" style="margin-bottom:10px" onclick="A.nutRecipeForm(null)">${ic('plus')} Neues Rezept</button>
       ${S.nutrition.recipes.length ? S.nutrition.recipes.map(r => {
         const m = recipeMacros(r);
-        return `<button class="row" onclick="A.nutRecipeForm('${r.id}')"><div class="row-main"><div class="row-title">${esc(r.name)}</div><div class="row-sub">${Math.round(m.kcal)} kcal / Portion · ${r.servings} Portionen</div></div>${ic('chevron_right')}</button>`;
+        return `<button class="row" onclick="A.nutRecipeForm('${r.id}')"><div class="row-main"><div class="row-title">${esc(r.name)}${r.freshDaily ? ' <span class="chip chip-line">Täglich frisch</span>' : ''}</div><div class="row-sub">${Math.round(m.kcal)} kcal / Portion · ${r.servings} Portionen</div></div>${ic('chevron_right')}</button>`;
       }).join('') : `<div class="row-sub">Noch keine Rezepte.</div>`}`,
   });
 };
@@ -286,8 +344,8 @@ let recipeDraft = null;
 A.nutRecipeForm = id => {
   const existing = id ? getRecipe(id) : null;
   recipeDraft = existing
-    ? { name: existing.name, servings: existing.servings, ingredients: existing.ingredients.map(i => ({ ...i })) }
-    : { name: '', servings: 4, ingredients: [] };
+    ? { name: existing.name, servings: existing.servings, ingredients: existing.ingredients.map(i => ({ ...i })), instructions: existing.instructions || '', freshDaily: !!existing.freshDaily }
+    : { name: '', servings: 4, ingredients: [], instructions: '', freshDaily: false };
   openRecipeFormSheet(existing);
 };
 
@@ -302,12 +360,19 @@ function openRecipeFormSheet(existing) {
       <div class="mstp-row"><span class="mstp-lbl">Portionen</span>
         <div class="mstp"><button data-serv-dec>${ic('minus')}</button><b id="rf-servings">${recipeDraft.servings}</b><button data-serv-inc>${ic('plus')}</button></div>
       </div>
+      <div class="mstp-row">
+        <span class="mstp-lbl">Wird jeden Tag frisch gemacht</span>
+        <button class="switch${recipeDraft.freshDaily ? ' on' : ''}" id="rf-fresh" role="switch" aria-checked="${recipeDraft.freshDaily}"></button>
+      </div>
+      <div class="row-sub" style="margin:-4px 0 12px">Erscheint dann nicht mehr unter „Diese Woche kochen" (Zutaten bleiben aber auf der Einkaufsliste).</div>
       <div class="card" style="text-align:center" id="rf-total"></div>
       <div class="slbl">Zutaten</div>
       <div id="rf-ing-list"></div>
       <button class="btn btn-ghost full" id="rf-add-ing">${ic('plus')} Zutat hinzufügen</button>
       <div id="rf-pick-list" style="max-height:0;overflow:hidden;transition:max-height .3s ease"></div>
-      <button class="btn btn-acc full" style="margin-top:14px" id="rf-save">${ic('check')} Speichern</button>
+      <div class="field" style="margin-top:14px"><label>Zubereitung (optional)</label>
+        <textarea class="inp" id="rf-instructions" rows="4" style="min-height:90px;padding:12px" placeholder="Schritt für Schritt …">${esc(recipeDraft.instructions)}</textarea></div>
+      <button class="btn btn-acc full" style="margin-top:6px" id="rf-save">${ic('check')} Speichern</button>
       ${existing ? `<button class="btn btn-danger full mt8" id="rf-delete">${ic('trash')} Rezept löschen</button>` : ''}`,
     onOpen(sheet) { wireRecipeForm(sheet, existing); },
   });
@@ -362,6 +427,13 @@ function wireRecipeForm(sheet, existing) {
   renderRecipeDraft(sheet);
 
   sheet.querySelector('#rf-name').addEventListener('input', e => { recipeDraft.name = e.target.value; });
+  sheet.querySelector('#rf-instructions').addEventListener('input', e => { recipeDraft.instructions = e.target.value; });
+  sheet.querySelector('#rf-fresh').addEventListener('click', () => {
+    recipeDraft.freshDaily = !recipeDraft.freshDaily;
+    const btn = sheet.querySelector('#rf-fresh');
+    btn.classList.toggle('on', recipeDraft.freshDaily);
+    btn.setAttribute('aria-checked', recipeDraft.freshDaily);
+  });
   sheet.querySelector('[data-serv-inc]').addEventListener('click', () => { recipeDraft.servings++; renderRecipeDraft(sheet); });
   sheet.querySelector('[data-serv-dec]').addEventListener('click', () => { recipeDraft.servings = Math.max(1, recipeDraft.servings - 1); renderRecipeDraft(sheet); });
 
@@ -403,11 +475,9 @@ function wireRecipeForm(sheet, existing) {
     const name = sheet.querySelector('#rf-name').value.trim();
     if (!name) { toast('Bitte Namen eingeben', 'info_circle'); return; }
     if (!recipeDraft.ingredients.length) { toast('Bitte mindestens eine Zutat hinzufügen', 'info_circle'); return; }
-    if (existing) {
-      Object.assign(existing, { name, servings: recipeDraft.servings, ingredients: recipeDraft.ingredients });
-    } else {
-      S.nutrition.recipes.push({ id: uid(), name, servings: recipeDraft.servings, ingredients: recipeDraft.ingredients });
-    }
+    const data = { name, servings: recipeDraft.servings, ingredients: recipeDraft.ingredients, instructions: recipeDraft.instructions.trim(), freshDaily: recipeDraft.freshDaily };
+    if (existing) Object.assign(existing, data);
+    else S.nutrition.recipes.push({ id: uid(), ...data });
     save();
     closeSheet();
     A.nutRecipesManage();
@@ -490,34 +560,52 @@ function openFoodForm(existing, onSave) {
   });
 }
 
-// ─── Einkaufen ───────────────────────────────────────────────────────────────
+// ─── Einkaufen (Akkordeon: eine Sektion pro geplanter Woche) ────────────────
 function einkaufenPanelHTML() {
-  const list = weekShoppingList();
-  if (!list.length) {
+  const weeks = plannedWeeks();
+  if (expandedWeeks === null) expandedWeeks = new Set(weeks.length ? [weeks[0]] : []);
+  if (!weeks.length) {
     return `<div class="empty">${ic('clipboard_list')}<br>Noch nichts geplant.<br>Leg im Wochenplan Rezepte an — die Einkaufsliste füllt sich automatisch.</div>`;
   }
-  const html = [`<div class="row-sub" style="margin-bottom:10px">Automatisch aus dem Wochenplan generiert.</div>`];
-  list.forEach(item => {
-    const checked = !!S.nutrition.shopChecked[item.foodId];
+  const html = [];
+  weeks.forEach(ws => {
+    const isOpen = expandedWeeks.has(ws);
+    const isCurrentWeek = ws === weekStartISO(todayISO());
     html.push(`
-      <div class="shop-row${checked ? ' checked' : ''}" onclick="A.nutShopToggle('${item.foodId}')">
-        <div class="shop-check">${ic('check')}</div>
-        <div class="shop-name">${esc(item.foodName)}</div>
-        <div class="shop-amt">${item.totalAmount}${item.unit === 'stück' ? ' Stück' : ' g'}</div>
-      </div>`);
+      <button class="row" onclick="A.nutToggleWeekAccordion('${ws}')">
+        <div class="row-main"><div class="row-title">${isCurrentWeek ? 'Diese Woche' : weekRangeLabel(ws)}</div>${isCurrentWeek ? `<div class="row-sub">${weekRangeLabel(ws)}</div>` : ''}</div>
+        ${ic(isOpen ? 'chevron_up' : 'chevron_down')}
+      </button>`);
+    if (isOpen) {
+      weekShoppingList(ws).forEach(item => {
+        const checked = !!(S.nutrition.shopChecked[ws] && S.nutrition.shopChecked[ws][item.foodId]);
+        html.push(`
+          <button class="shop-row${checked ? ' checked' : ''}" onclick="A.nutShopToggle('${ws}','${item.foodId}')">
+            <div class="shop-check">${ic('check')}</div>
+            <div class="shop-name">${esc(item.foodName)}</div>
+            <div class="shop-amt">${item.totalAmount}${item.unit === 'stück' ? ' Stück' : ' g'}</div>
+          </button>`);
+      });
+      html.push(`<button class="btn btn-ghost full sm" style="margin-bottom:14px" onclick="A.nutShopReset('${ws}')">${ic('refresh')} Diese Woche neu generieren</button>`);
+    }
   });
-  html.push(`<button class="btn btn-ghost full" style="margin-top:8px" onclick="A.nutShopReset()">${ic('refresh')} Neu generieren</button>`);
   return html.join('');
 }
 
-A.nutShopToggle = foodId => {
-  S.nutrition.shopChecked[foodId] = !S.nutrition.shopChecked[foodId];
+A.nutToggleWeekAccordion = ws => {
+  if (expandedWeeks.has(ws)) expandedWeeks.delete(ws); else expandedWeeks.add(ws);
+  render();
+};
+
+A.nutShopToggle = (ws, foodId) => {
+  const map = S.nutrition.shopChecked[ws] || (S.nutrition.shopChecked[ws] = {});
+  if (map[foodId]) delete map[foodId]; else map[foodId] = true;
   save();
   render();
 };
 
-A.nutShopReset = () => {
-  S.nutrition.shopChecked = {};
+A.nutShopReset = ws => {
+  S.nutrition.shopChecked[ws] = {};
   save();
   render();
   toast('Liste zurückgesetzt');

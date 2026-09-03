@@ -46,6 +46,12 @@ export function weekdayIdx(d = new Date()) {
   return (d.getDay() + 6) % 7;
 }
 
+// Montag der Woche, die dieses ISO-Datum enthält
+export function weekStartISO(dateISO) {
+  const d = fromISO(dateISO);
+  return toISO(addDays(d, -weekdayIdx(d)));
+}
+
 export function addDays(d, n) {
   const nd = new Date(d);
   nd.setDate(nd.getDate() + n);
